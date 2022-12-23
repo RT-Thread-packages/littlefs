@@ -585,7 +585,7 @@ static int _dfs_lfs_open(struct dfs_fd* file)
         }
         else
         {
-            file->vnode->fs = (void*)dfs_lfs_fd;
+            file->data = (void*)dfs_lfs_fd;
             return RT_EOK;
         }
 
@@ -632,7 +632,7 @@ static int _dfs_lfs_open(struct dfs_fd* file)
         }
         else
         {
-            file->vnode->fs = (void*)dfs_lfs_fd;
+            file->data = (void*)dfs_lfs_fd;
             file->pos = dfs_lfs_fd->u.file.pos;
             file->vnode->size = dfs_lfs_fd->u.file.ctz.size;
             return RT_EOK;
@@ -653,9 +653,9 @@ static int _dfs_lfs_close(struct dfs_fd* file)
     int result;
     dfs_lfs_fd_t* dfs_lfs_fd;
     RT_ASSERT(file != RT_NULL);
-    RT_ASSERT(file->vnode->fs != RT_NULL);
+    RT_ASSERT(file->data != RT_NULL);
 
-    dfs_lfs_fd = (dfs_lfs_fd_t*)file->vnode->fs;
+    dfs_lfs_fd = (dfs_lfs_fd_t*)file->data;
 
     if (file->vnode->type == FT_DIRECTORY)
     {
@@ -682,14 +682,14 @@ static int _dfs_lfs_read(struct dfs_fd* file, void* buf, size_t len)
     dfs_lfs_fd_t* dfs_lfs_fd;
 
     RT_ASSERT(file != RT_NULL);
-    RT_ASSERT(file->vnode->fs != RT_NULL);
+    RT_ASSERT(file->data != RT_NULL);
 
     if (file->vnode->type == FT_DIRECTORY)
     {
         return -EISDIR;
     }
 
-    dfs_lfs_fd = (dfs_lfs_fd_t*)file->vnode->fs;
+    dfs_lfs_fd = (dfs_lfs_fd_t*)file->data;
 
 #if 0
     if (lfs_file_tell(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file) != file->pos)
@@ -720,14 +720,14 @@ static int _dfs_lfs_write(struct dfs_fd* file, const void* buf, size_t len)
     lfs_ssize_t ssize;
     dfs_lfs_fd_t* dfs_lfs_fd;
     RT_ASSERT(file != RT_NULL);
-    RT_ASSERT(file->vnode->fs != RT_NULL);
+    RT_ASSERT(file->data != RT_NULL);
 
     if (file->vnode->type == FT_DIRECTORY)
     {
         return -EISDIR;
     }
 
-    dfs_lfs_fd = (dfs_lfs_fd_t*)file->vnode->fs;
+    dfs_lfs_fd = (dfs_lfs_fd_t*)file->data;
 
 #if 0
     if (lfs_file_tell(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file) != file->pos)
@@ -760,9 +760,9 @@ static int _dfs_lfs_flush(struct dfs_fd* file)
     dfs_lfs_fd_t* dfs_lfs_fd;
 
     RT_ASSERT(file != RT_NULL);
-    RT_ASSERT(file->vnode->fs != RT_NULL);
+    RT_ASSERT(file->data != RT_NULL);
 
-    dfs_lfs_fd = (dfs_lfs_fd_t*)file->vnode->fs;
+    dfs_lfs_fd = (dfs_lfs_fd_t*)file->data;
     result = lfs_file_sync(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file);
 
     return _lfs_result_to_dfs(result);
@@ -773,9 +773,9 @@ static int _dfs_lfs_lseek(struct dfs_fd* file, rt_off_t offset)
     dfs_lfs_fd_t* dfs_lfs_fd;
 
     RT_ASSERT(file != RT_NULL);
-    RT_ASSERT(file->vnode->fs != RT_NULL);
+    RT_ASSERT(file->data != RT_NULL);
 
-    dfs_lfs_fd = (dfs_lfs_fd_t*)file->vnode->fs;
+    dfs_lfs_fd = (dfs_lfs_fd_t*)file->data;
 
     if (file->vnode->type == FT_REGULAR)
     {
@@ -809,9 +809,9 @@ static int _dfs_lfs_getdents(struct dfs_fd* file, struct dirent* dirp, uint32_t 
     struct dirent* d;
     struct lfs_info info;
 
-    RT_ASSERT(file->vnode->fs != RT_NULL);
+    RT_ASSERT(file->data != RT_NULL);
 
-    dfs_lfs_fd = (dfs_lfs_fd_t*)(file->vnode->fs);
+    dfs_lfs_fd = (dfs_lfs_fd_t*)(file->data);
 
     /* make integer count */
     count = (count / sizeof(struct dirent)) * sizeof(struct dirent);
