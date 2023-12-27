@@ -360,7 +360,7 @@ static int _dfs_lfs_unmount(struct dfs_filesystem* dfs)
 }
 
 #ifndef LFS_READONLY
-static int _dfs_lfs_mkfs(rt_device_t dev_id, const char *fs_name)
+static int _dfs_lfs_mkfs(rt_device_t dev_id)
 {
     int result;
     int index;
