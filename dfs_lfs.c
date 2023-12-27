@@ -360,7 +360,7 @@ static int _dfs_lfs_unmount(struct dfs_filesystem* dfs)
 }
 
 #ifndef LFS_READONLY
-static int _dfs_lfs_mkfs(rt_device_t dev_id)
+static int _dfs_lfs_mkfs(rt_device_t dev_id, const char *fs_name)
 {
     int result;
     int index;
@@ -547,9 +547,21 @@ static int _dfs_lfs_open(struct dfs_file* file)
     int flags = 0;
 
     RT_ASSERT(file != RT_NULL);
-    RT_ASSERT(file->data != RT_NULL);
 
-    dfs = (struct dfs_filesystem*)file->data;
+    dfs = (struct dfs_filesystem*)file->vnode->fs;
+
+    RT_ASSERT(file->vnode->ref_count > 0);
+    if (file->vnode->ref_count > 1)
+    {
+        if (file->vnode->type == FT_DIRECTORY
+                && !(file->flags & O_DIRECTORY))
+        {
+            return -ENOENT;
+        }
+        file->pos = 0;
+        return 0;
+    }
+
     dfs_lfs = (dfs_lfs_t*)dfs->data;
 
     if (file->flags & O_DIRECTORY)
@@ -654,6 +666,12 @@ static int _dfs_lfs_close(struct dfs_file* file)
     dfs_lfs_fd_t* dfs_lfs_fd;
     RT_ASSERT(file != RT_NULL);
     RT_ASSERT(file->data != RT_NULL);
+
+    RT_ASSERT(file->vnode->ref_count > 0);
+    if (file->vnode->ref_count > 1)
+    {
+        return 0;
+    }
 
     dfs_lfs_fd = (dfs_lfs_fd_t*)file->data;
 
