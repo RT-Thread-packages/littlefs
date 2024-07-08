@@ -41,6 +41,8 @@
     #define LFS_LOOKAHEAD_MAX 128
 #endif
 
+#define ATTR_TIMESTAMP 0x74
+
 typedef struct _dfs_lfs_s
 {
     struct lfs lfs;
@@ -478,7 +480,7 @@ static int _dfs_lfs_unlink(struct dfs_filesystem* dfs, const char* path)
 }
 #endif
 
-static void _dfs_lfs_tostat(struct stat* st, struct lfs_info* info)
+static void _dfs_lfs_tostat(struct stat* st, struct lfs_info* info, time_t mtime)
 {
     memset(st, 0, sizeof(struct stat));
 
@@ -497,6 +499,8 @@ static void _dfs_lfs_tostat(struct stat* st, struct lfs_info* info)
         st->st_mode |= S_IFREG;
         break;
     }
+
+    st->st_mtime = mtime;
 }
 
 static int _dfs_lfs_stat(struct dfs_filesystem* dfs, const char* path, struct stat* st)
@@ -516,7 +520,10 @@ static int _dfs_lfs_stat(struct dfs_filesystem* dfs, const char* path, struct st
         return _lfs_result_to_dfs(result);
     }
 
-    _dfs_lfs_tostat(st, &info);
+    time_t mtime;
+    lfs_getattr(&dfs_lfs->lfs, path, ATTR_TIMESTAMP, &mtime, sizeof(time_t));
+
+    _dfs_lfs_tostat(st, &info, mtime);
     return 0;
 }
 
@@ -683,6 +690,9 @@ static int _dfs_lfs_close(struct dfs_file* file)
     {
         result = lfs_file_close(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file);
     }
+
+    time_t now = time(RT_NULL);
+    lfs_setattr(dfs_lfs_fd->lfs, file->vnode->path, ATTR_TIMESTAMP, &now, sizeof(time_t));
 
     rt_free(dfs_lfs_fd);
 
