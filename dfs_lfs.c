@@ -520,7 +520,7 @@ static int _dfs_lfs_stat(struct dfs_filesystem* dfs, const char* path, struct st
         return _lfs_result_to_dfs(result);
     }
 
-    time_t mtime;
+    time_t mtime = 0;
     lfs_getattr(&dfs_lfs->lfs, path, ATTR_TIMESTAMP, &mtime, sizeof(time_t));
 
     _dfs_lfs_tostat(st, &info, mtime);
@@ -594,6 +594,11 @@ static int _dfs_lfs_open(struct dfs_file* file)
             if (result != LFS_ERR_OK)
             {
                 goto _error_dir;
+            }
+            else
+            {
+                time_t now = time(RT_NULL);
+                lfs_setattr(dfs_lfs_fd->lfs, file->vnode->path, ATTR_TIMESTAMP, &now, sizeof(time_t));
             }
         }
 
@@ -671,6 +676,7 @@ static int _dfs_lfs_close(struct dfs_file* file)
 {
     int result;
     dfs_lfs_fd_t* dfs_lfs_fd;
+    uint8_t need_time_update;
     RT_ASSERT(file != RT_NULL);
     RT_ASSERT(file->data != RT_NULL);
 
@@ -688,11 +694,14 @@ static int _dfs_lfs_close(struct dfs_file* file)
     }
     else
     {
+        need_time_update = (dfs_lfs_fd->u.file.flags & LFS_F_DIRTY) || (dfs_lfs_fd->u.file.flags & LFS_F_WRITING);
         result = lfs_file_close(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file);
+        if (result == LFS_ERR_OK && need_time_update)
+        {
+            time_t now = time(RT_NULL);
+            lfs_setattr(dfs_lfs_fd->lfs, file->vnode->path, ATTR_TIMESTAMP, &now, sizeof(time_t));
+        }
     }
-
-    time_t now = time(RT_NULL);
-    lfs_setattr(dfs_lfs_fd->lfs, file->vnode->path, ATTR_TIMESTAMP, &now, sizeof(time_t));
 
     rt_free(dfs_lfs_fd);
 
@@ -786,12 +795,19 @@ static int _dfs_lfs_flush(struct dfs_file* file)
 {
     int result;
     dfs_lfs_fd_t* dfs_lfs_fd;
+    uint8_t need_time_update;
 
     RT_ASSERT(file != RT_NULL);
     RT_ASSERT(file->data != RT_NULL);
 
     dfs_lfs_fd = (dfs_lfs_fd_t*)file->data;
+    need_time_update = (dfs_lfs_fd->u.file.flags & LFS_F_DIRTY) || (dfs_lfs_fd->u.file.flags & LFS_F_WRITING);
     result = lfs_file_sync(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file);
+    if (result == LFS_ERR_OK && need_time_update)
+    {
+        time_t now = time(RT_NULL);
+        lfs_setattr(dfs_lfs_fd->lfs, file->vnode->path, ATTR_TIMESTAMP, &now, sizeof(time_t));
+    }
 
     return _lfs_result_to_dfs(result);
 }
