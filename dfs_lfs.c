@@ -576,7 +576,6 @@ static int _dfs_lfs_open(struct dfs_file* file)
             return -ENOENT;
         }
         file->pos = 0;
-        return 0;
     }
 
     dfs_lfs = (dfs_lfs_t*)dfs->data;
@@ -691,10 +690,6 @@ static int _dfs_lfs_close(struct dfs_file* file)
     RT_ASSERT(file->data != RT_NULL);
 
     RT_ASSERT(file->vnode->ref_count > 0);
-    if (file->vnode->ref_count > 1)
-    {
-        return 0;
-    }
 
     dfs_lfs_fd = (dfs_lfs_fd_t*)file->data;
 
@@ -714,6 +709,7 @@ static int _dfs_lfs_close(struct dfs_file* file)
     }
 
     rt_free(dfs_lfs_fd);
+    file->data = RT_NULL;
 
     return _lfs_result_to_dfs(result);
 }
