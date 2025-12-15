@@ -839,13 +839,16 @@ static DFS_LFS_LSK_RETURN_TYPE _dfs_lfs_lseek(struct dfs_file* file, rt_off_t of
     }
     else if (file->vnode->type == FT_DIRECTORY)
     {
-        lfs_soff_t soff = lfs_dir_seek(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.dir, offset);
+        /* skip . and .. */
+        lfs_off_t off = offset / sizeof(struct dirent) + 2;
+        lfs_soff_t soff = lfs_dir_seek(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.dir, off);
         if (soff < 0)
         {
             return _lfs_result_to_dfs(soff);
         }
 
-        file->pos = dfs_lfs_fd->u.dir.pos;
+        /* file->pos must stay in user-space: remove the two dot entries accounted for in dir.pos */
+        file->pos = (dfs_lfs_fd->u.dir.pos > 2 ? dfs_lfs_fd->u.dir.pos - 2 : 0) * sizeof(struct dirent);
     }
 
     return (file->pos);
