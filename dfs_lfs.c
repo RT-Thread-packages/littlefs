@@ -716,6 +716,71 @@ static int _dfs_lfs_close(struct dfs_file* file)
 
 static int _dfs_lfs_ioctl(struct dfs_file* file, int cmd, void* args)
 {
+    switch (cmd)
+    {
+    case RT_FIOFTRUNCATE:
+    {
+#ifdef LFS_READONLY
+        return -EROFS;
+#else
+        dfs_lfs_fd_t *dfs_lfs_fd;
+        off_t length;
+        int result;
+        lfs_soff_t pos;
+
+        RT_ASSERT(file != RT_NULL);
+        RT_ASSERT(file->data != RT_NULL);
+
+        if (file->vnode->type == FT_DIRECTORY)
+        {
+            return -EISDIR;
+        }
+
+        if (args == RT_NULL)
+        {
+            return -EINVAL;
+        }
+
+        if ((file->flags & 3) == O_RDONLY)
+        {
+            return -EBADF;
+        }
+
+        length = *(off_t *)args;
+        if (length < 0)
+        {
+            return -EINVAL;
+        }
+
+        dfs_lfs_fd = (dfs_lfs_fd_t *)file->data;
+
+        result = lfs_file_truncate(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file, (lfs_off_t)length);
+        if (result < 0)
+        {
+            return _lfs_result_to_dfs(result);
+        }
+
+        pos = lfs_file_tell(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file);
+        if (pos < 0)
+        {
+            return _lfs_result_to_dfs((int)pos);
+        }
+        file->pos = (rt_off_t)pos;
+
+        pos = lfs_file_size(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file);
+        if (pos < 0)
+        {
+            return _lfs_result_to_dfs((int)pos);
+        }
+        file->vnode->size = (rt_off_t)pos;
+        return RT_EOK;
+#endif
+    }
+
+    default:
+        break;
+    }
+
     return -ENOSYS;
 }
 
