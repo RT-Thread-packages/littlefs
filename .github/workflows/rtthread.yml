@@ -1,0 +1,109 @@
+name: rtthread
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+jobs:
+  compile-littlefs:
+    name: RT-Thread DFS compile
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+
+    env:
+      RTTHREAD_ELF: rtthread.elf
+      RTT_CC: gcc
+      RTTHREAD_REUSE_WORKDIR: 1
+      RTTHREAD_BUILD_PROFILES: |
+        v4.1.1 v1 bsp/qemu-vexpress-a9
+        v5.0.0 v1 bsp/qemu-vexpress-a9
+        v5.0.1 v1 bsp/qemu-vexpress-a9
+        v5.0.1 v2 bsp/qemu-vexpress-a9
+        v5.0.2 v1 bsp/qemu-vexpress-a9
+        v5.0.2 v2 bsp/qemu-vexpress-a9
+        master v1 bsp/qemu-vexpress-a9
+        master v2 bsp/qemu-vexpress-a9
+
+    steps:
+      - name: Checkout littlefs package
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates \
+            git \
+            make \
+            gcc-arm-none-eabi \
+            libnewlib-arm-none-eabi \
+            libstdc++-arm-none-eabi-newlib \
+            scons \
+            python3 \
+            python3-pip
+          python3 -m pip install --user kconfiglib
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          arm-none-eabi-gcc --version
+          scons --version
+          python3 --version
+
+      - name: Compile littlefs against RT-Thread profiles
+        run: |
+          mkdir -p _ci/logs
+          printf '%s\n' "$RTTHREAD_BUILD_PROFILES" > _ci/rtthread-build-profiles.txt
+
+          failed_profiles_file=_ci/failed-rtthread-profiles.txt
+          : > "$failed_profiles_file"
+          while read -r rtthread_ref dfs_version bsp; do
+            [ -n "${rtthread_ref:-}" ] || continue
+            case "$rtthread_ref" in
+              \#*) continue ;;
+            esac
+
+            log_ref=${rtthread_ref//\//-}
+            log_file="_ci/logs/rtthread-${log_ref}-${dfs_version}.log"
+            printf 'building RT-Thread %s DFS %s with BSP %s\n' \
+              "$rtthread_ref" "$dfs_version" "$bsp"
+
+            if RTTHREAD_REF="$rtthread_ref" \
+              RTTHREAD_DFS_VERSION="$dfs_version" \
+              RTTHREAD_BSP="$bsp" \
+              sh .github/ci/rtthread-littlefs/build.sh 2>&1 | tee "$log_file"; then
+              printf 'profile passed: %s %s %s\n' \
+                "$rtthread_ref" "$dfs_version" "$bsp"
+            else
+              printf 'profile failed: %s %s %s\n' \
+                "$rtthread_ref" "$dfs_version" "$bsp" >&2
+              printf '%s %s %s\n' \
+                "$rtthread_ref" "$dfs_version" "$bsp" >> "$failed_profiles_file"
+            fi
+          done < _ci/rtthread-build-profiles.txt
+
+          if [ -s "$failed_profiles_file" ]; then
+            printf 'failed RT-Thread profiles:\n' >&2
+            cat "$failed_profiles_file" >&2
+            exit 1
+          fi
+
+      - name: Upload RT-Thread compile logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtthread-compile-logs
+          path: |
+            _ci/logs/*.log
+            _ci/rtthread-build-profiles.txt
+            _ci/failed-rtthread-profiles.txt
+          if-no-files-found: warn
