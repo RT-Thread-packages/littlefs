@@ -3,6 +3,12 @@
 
 #include <dfs_file.h>
 #include <dfs_fs.h>
+#if defined(RT_USING_DFS_V2)
+#include <dfs_dentry.h>
+#include <dfs_mnt.h>
+#else
+#include <dfs.h>
+#endif /* defined(RT_USING_DFS_V2) */
 
 #include "lfs.h"
 
@@ -12,12 +18,165 @@
 #if defined(RT_VERSION_CHECK) && (RTTHREAD_VERSION >= RT_VERSION_CHECK(5, 0, 2))
 #define DFS_LFS_RW_RETURN_TYPE  ssize_t
 #define DFS_LFS_LSK_RETURN_TYPE off_t
-#define DFS_LFS_MKFS(dev_id, fs_name) _dfs_lfs_mkfs(dev_id, fs_name)
 #else
 #define DFS_LFS_RW_RETURN_TYPE  int
 #define DFS_LFS_LSK_RETURN_TYPE int
-#define DFS_LFS_MKFS(dev_id, fs_name) _dfs_lfs_mkfs(dev_id)
-#endif
+#endif /* defined(RT_VERSION_CHECK) && (RTTHREAD_VERSION >= RT_VERSION_CHECK(5, 0, 2)) */
+
+#if defined(RT_USING_DFS_V2) || (defined(RT_VERSION_CHECK) && (RTTHREAD_VERSION >= RT_VERSION_CHECK(5, 0, 0)))
+#define DFS_LFS_MKFS_PARAMS rt_device_t dev_id, const char *fs_name
+#define DFS_LFS_MKFS_HAS_FS_NAME 1
+#else
+#define DFS_LFS_MKFS_PARAMS rt_device_t dev_id
+#define DFS_LFS_MKFS_HAS_FS_NAME 0
+#endif /* defined(RT_USING_DFS_V2) || (defined(RT_VERSION_CHECK) && (RTTHREAD_VERSION >= RT_VERSION_CHECK(5, 0, 0))) */
+
+/**
+ * @brief Keep DFS v1/v2 ABI differences in one place.
+ *
+ * RT-Thread has several incompatible DFS file-operation ABIs:
+ *
+ * - DFS v2 uses struct dfs_mnt and dentry based paths.
+ * - RT-Thread 5.0.2 and later use struct dfs_file for non-DFS-v2 builds.
+ * - RT-Thread 5.x builds that define RT_USING_DFS_V1 also use struct dfs_file,
+ *   even though the selected filesystem profile is DFS v1.
+ * - RT-Thread 5.0.0 without RT_USING_DFS_V1 is a transition ABI: file
+ *   callbacks still use struct dfs_fd, but path/type/size/fs live in vnode.
+ * - RT-Thread 4.x and older legacy DFS builds use struct dfs_fd with direct
+ *   fd fields such as path, type, size and fs.
+ */
+#if defined(RT_USING_DFS_V2)
+#define DFS_LFS_FS_FLAGS                            FS_NEED_DEVICE
+#define DFS_LFS_MNT_TYPE                            struct dfs_mnt
+#define DFS_LFS_MNT_DEV(mnt)                        ((mnt)->dev_id)
+#define DFS_LFS_MNT_DATA(mnt)                       ((mnt)->data)
+#define DFS_LFS_SET_MNT_DATA(mnt, value)            ((mnt)->data = (value))
+#define DFS_LFS_FILE_STRUCT                         struct dfs_file
+#define DFS_LFS_FILE_PATH(file)                     ((file)->dentry->pathname)
+#define DFS_LFS_FILE_POS(file)                      ((file)->fpos)
+#define DFS_LFS_FILE_SIZE(file)                     ((file)->vnode->size)
+#define DFS_LFS_FILE_TYPE(file)                     ((file)->vnode->type)
+#define DFS_LFS_FILE_REF_COUNT(file)                ((file)->vnode->ref_count)
+#define DFS_LFS_FILE_IS_VALID(file)                 ((file)->vnode != RT_NULL)
+#define DFS_LFS_FILE_FS(file)                       ((file)->dentry->mnt)
+#define DFS_LFS_READ_PARAMS                         DFS_LFS_FILE_STRUCT* file, void* buf, size_t len, off_t* pos
+#define DFS_LFS_WRITE_PARAMS                        DFS_LFS_FILE_STRUCT* file, const void* buf, size_t len, off_t* pos
+#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, off_t offset, int whence
+#define DFS_LFS_IO_POS_PARAM                        pos
+#define DFS_LFS_LSEEK_WHENCE                        whence
+#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (*(pos) = (off_t)(lfs_pos))
+#define DFS_LFS_REGISTER()                          dfs_register(&_dfs_lfs_type)
+#elif defined(RT_VERSION_CHECK) && (RTTHREAD_VERSION >= RT_VERSION_CHECK(5, 0, 2))
+/**
+ * @brief RT-Thread 5.0.2 and later non-DFS-v2 builds use struct dfs_file
+ *        callbacks with vnode-backed file metadata.
+ */
+#define DFS_LFS_MNT_TYPE                            struct dfs_filesystem
+#define DFS_LFS_MNT_DEV(mnt)                        ((mnt)->dev_id)
+#define DFS_LFS_MNT_DATA(mnt)                       ((mnt)->data)
+#define DFS_LFS_SET_MNT_DATA(mnt, value)            ((mnt)->data = (value))
+#define DFS_LFS_FILE_STRUCT                         struct dfs_file
+#define DFS_LFS_FILE_PATH(file)                     ((file)->vnode->path)
+#define DFS_LFS_FILE_POS(file)                      ((file)->pos)
+#define DFS_LFS_FILE_SIZE(file)                     ((file)->vnode->size)
+#define DFS_LFS_FILE_TYPE(file)                     ((file)->vnode->type)
+#define DFS_LFS_FILE_REF_COUNT(file)                ((file)->vnode->ref_count)
+#define DFS_LFS_FILE_IS_VALID(file)                 ((file)->vnode != RT_NULL)
+#define DFS_LFS_FILE_FS(file)                       ((file)->vnode->fs)
+#define DFS_LFS_READ_PARAMS                         DFS_LFS_FILE_STRUCT* file, void* buf, size_t len
+#define DFS_LFS_WRITE_PARAMS                        DFS_LFS_FILE_STRUCT* file, const void* buf, size_t len
+#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, rt_off_t offset
+#define DFS_LFS_IO_POS_PARAM                        RT_NULL
+#define DFS_LFS_LSEEK_WHENCE                        SEEK_SET
+#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (rt_off_t)(lfs_pos))
+#define DFS_LFS_FS_FLAGS                            DFS_FS_FLAG_DEFAULT
+#define DFS_LFS_REGISTER()                          dfs_register(&_dfs_lfs_ops)
+#elif defined(RT_USING_DFS_V1)
+/**
+ * @brief RT-Thread 5.x DFS v1 split builds use struct dfs_file callbacks.
+ *
+ * This branch is for versions where DFS v1/v2 are explicit Kconfig profiles.
+ * For example, RT-Thread v5.0.1 with RT_USING_DFS_V1 enabled still uses the
+ * DFS v1 profile, but its file operation callbacks take struct dfs_file and
+ * file metadata is stored under vnode.
+ */
+#define DFS_LFS_MNT_TYPE                            struct dfs_filesystem
+#define DFS_LFS_MNT_DEV(mnt)                        ((mnt)->dev_id)
+#define DFS_LFS_MNT_DATA(mnt)                       ((mnt)->data)
+#define DFS_LFS_SET_MNT_DATA(mnt, value)            ((mnt)->data = (value))
+#define DFS_LFS_FILE_STRUCT                         struct dfs_file
+#define DFS_LFS_FILE_PATH(file)                     ((file)->vnode->path)
+#define DFS_LFS_FILE_POS(file)                      ((file)->pos)
+#define DFS_LFS_FILE_SIZE(file)                     ((file)->vnode->size)
+#define DFS_LFS_FILE_TYPE(file)                     ((file)->vnode->type)
+#define DFS_LFS_FILE_REF_COUNT(file)                ((file)->vnode->ref_count)
+#define DFS_LFS_FILE_IS_VALID(file)                 ((file)->vnode != RT_NULL)
+#define DFS_LFS_FILE_FS(file)                       ((file)->vnode->fs)
+#define DFS_LFS_READ_PARAMS                         DFS_LFS_FILE_STRUCT* file, void* buf, size_t len
+#define DFS_LFS_WRITE_PARAMS                        DFS_LFS_FILE_STRUCT* file, const void* buf, size_t len
+#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, rt_off_t offset
+#define DFS_LFS_IO_POS_PARAM                        RT_NULL
+#define DFS_LFS_LSEEK_WHENCE                        SEEK_SET
+#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (rt_off_t)(lfs_pos))
+#define DFS_LFS_FS_FLAGS                            DFS_FS_FLAG_DEFAULT
+#define DFS_LFS_REGISTER()                          dfs_register(&_dfs_lfs_ops)
+#elif defined(RT_VERSION_CHECK) && (RTTHREAD_VERSION >= RT_VERSION_CHECK(5, 0, 0))
+/**
+ * @brief RT-Thread 5.0.0 transition builds use struct dfs_fd callbacks.
+ *
+ * This branch is for 5.x transition builds that do not expose RT_USING_DFS_V1.
+ * The callback parameter is still struct dfs_fd, but file metadata has already
+ * moved to vnode. This differs from older RT-Thread 4.x legacy DFS layouts.
+ */
+#define DFS_LFS_MNT_TYPE                            struct dfs_filesystem
+#define DFS_LFS_MNT_DEV(mnt)                        ((mnt)->dev_id)
+#define DFS_LFS_MNT_DATA(mnt)                       ((mnt)->data)
+#define DFS_LFS_SET_MNT_DATA(mnt, value)            ((mnt)->data = (value))
+#define DFS_LFS_FILE_STRUCT                         struct dfs_fd
+#define DFS_LFS_FILE_PATH(file)                     ((file)->vnode->path)
+#define DFS_LFS_FILE_POS(file)                      ((file)->pos)
+#define DFS_LFS_FILE_SIZE(file)                     ((file)->vnode->size)
+#define DFS_LFS_FILE_TYPE(file)                     ((file)->vnode->type)
+#define DFS_LFS_FILE_REF_COUNT(file)                ((file)->ref_count)
+#define DFS_LFS_FILE_IS_VALID(file)                 ((file)->vnode != RT_NULL)
+#define DFS_LFS_FILE_FS(file)                       ((file)->vnode->fs)
+#define DFS_LFS_READ_PARAMS                         DFS_LFS_FILE_STRUCT* file, void* buf, size_t len
+#define DFS_LFS_WRITE_PARAMS                        DFS_LFS_FILE_STRUCT* file, const void* buf, size_t len
+#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, rt_off_t offset
+#define DFS_LFS_IO_POS_PARAM                        RT_NULL
+#define DFS_LFS_LSEEK_WHENCE                        SEEK_SET
+#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (rt_off_t)(lfs_pos))
+#define DFS_LFS_FS_FLAGS                            DFS_FS_FLAG_DEFAULT
+#define DFS_LFS_REGISTER()                          dfs_register(&_dfs_lfs_ops)
+#else
+/**
+ * @brief RT-Thread 4.x and older legacy DFS builds.
+ *
+ * These versions do not provide the DFS v1/v2 split macros. File operation
+ * callbacks use struct dfs_fd, and path/type/size/fs are direct struct dfs_fd
+ * fields instead of vnode-backed fields.
+ */
+#define DFS_LFS_MNT_TYPE                            struct dfs_filesystem
+#define DFS_LFS_MNT_DEV(mnt)                        ((mnt)->dev_id)
+#define DFS_LFS_MNT_DATA(mnt)                       ((mnt)->data)
+#define DFS_LFS_SET_MNT_DATA(mnt, value)            ((mnt)->data = (value))
+#define DFS_LFS_FILE_STRUCT                         struct dfs_fd
+#define DFS_LFS_FILE_PATH(file)                     ((file)->path)
+#define DFS_LFS_FILE_POS(file)                      ((file)->pos)
+#define DFS_LFS_FILE_SIZE(file)                     ((file)->size)
+#define DFS_LFS_FILE_TYPE(file)                     ((file)->type)
+#define DFS_LFS_FILE_REF_COUNT(file)                ((file)->ref_count)
+#define DFS_LFS_FILE_IS_VALID(file)                 RT_TRUE
+#define DFS_LFS_FILE_FS(file)                       ((file)->fs)
+#define DFS_LFS_READ_PARAMS                         DFS_LFS_FILE_STRUCT* file, void* buf, size_t len
+#define DFS_LFS_WRITE_PARAMS                        DFS_LFS_FILE_STRUCT* file, const void* buf, size_t len
+#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, rt_off_t offset
+#define DFS_LFS_IO_POS_PARAM                        RT_NULL
+#define DFS_LFS_LSEEK_WHENCE                        SEEK_SET
+#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (rt_off_t)(lfs_pos))
+#define DFS_LFS_FS_FLAGS                            DFS_FS_FLAG_DEFAULT
+#define DFS_LFS_REGISTER()                          dfs_register(&_dfs_lfs_ops)
+#endif /* defined(RT_USING_DFS_V2) */
 
 #ifndef RT_DEF_LFS_DRIVERS
     #define RT_DEF_LFS_DRIVERS 1
@@ -259,6 +418,49 @@ static int _lfs_result_to_dfs(int result)
     return status;
 }
 
+/* DFS v2 passes read/write offsets explicitly. Keep DFS v1 behavior unchanged. */
+static int _dfs_lfs_sync_file_pos(DFS_LFS_FILE_STRUCT* file,
+                                  dfs_lfs_fd_t* dfs_lfs_fd,
+                                  off_t* pos)
+{
+#if defined(RT_USING_DFS_V2)
+    lfs_soff_t current;
+    lfs_soff_t target;
+    lfs_soff_t result;
+
+    RT_ASSERT(file != RT_NULL);
+    RT_ASSERT(dfs_lfs_fd != RT_NULL);
+    RT_ASSERT(pos != RT_NULL);
+
+    target = (lfs_soff_t)*pos;
+    current = lfs_file_tell(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file);
+    if (current < 0)
+    {
+        return _lfs_result_to_dfs((int)current);
+    }
+
+    if (current == target)
+    {
+        return RT_EOK;
+    }
+
+    result = lfs_file_seek(dfs_lfs_fd->lfs,
+                           &dfs_lfs_fd->u.file,
+                           target,
+                           LFS_SEEK_SET);
+    if (result < 0)
+    {
+        return _lfs_result_to_dfs((int)result);
+    }
+#else
+    (void)file;
+    (void)dfs_lfs_fd;
+    (void)pos;
+#endif /* defined(RT_USING_DFS_V2) */
+
+    return RT_EOK;
+}
+
 static void _lfs_load_config(struct lfs_config* lfs_cfg, struct rt_mtd_nor_device* mtd_nor)
 {
     uint64_t mtd_size;
@@ -296,14 +498,14 @@ static void _lfs_load_config(struct lfs_config* lfs_cfg, struct rt_mtd_nor_devic
     lfs_cfg->sync = _lfs_flash_sync;
 }
 
-static int _dfs_lfs_mount(struct dfs_filesystem* dfs, unsigned long rwflag, const void* data)
+static int _dfs_lfs_mount(DFS_LFS_MNT_TYPE* dfs, unsigned long rwflag, const void* data)
 {
     int result;
     int index;
     dfs_lfs_t* dfs_lfs;
 
     /* Check Device Type */
-    if (dfs->dev_id->type != RT_Device_Class_MTD)
+    if (DFS_LFS_MNT_DEV(dfs)->type != RT_Device_Class_MTD)
     {
         rt_kprintf("The flash device type must be MTD!\n");
         return -EINVAL;
@@ -325,7 +527,7 @@ static int _dfs_lfs_mount(struct dfs_filesystem* dfs, unsigned long rwflag, cons
     }
     rt_memset(dfs_lfs, 0, sizeof(dfs_lfs_t));
     rt_mutex_init(&dfs_lfs->lock, "lfslock", RT_IPC_FLAG_PRIO);
-    _lfs_load_config(&dfs_lfs->cfg, (struct rt_mtd_nor_device*)dfs->dev_id);
+    _lfs_load_config(&dfs_lfs->cfg, (struct rt_mtd_nor_device*)DFS_LFS_MNT_DEV(dfs));
 
     /* mount lfs*/
     result = lfs_mount(&dfs_lfs->lfs, &dfs_lfs->cfg);
@@ -339,30 +541,30 @@ static int _dfs_lfs_mount(struct dfs_filesystem* dfs, unsigned long rwflag, cons
     }
 
     /* mount succeed! */
-    dfs->data = (void*)dfs_lfs;
+    DFS_LFS_SET_MNT_DATA(dfs, (void*)dfs_lfs);
     _lfs_mount_tbl[index] = dfs_lfs;
     return RT_EOK;
 }
 
-static int _dfs_lfs_unmount(struct dfs_filesystem* dfs)
+static int _dfs_lfs_unmount(DFS_LFS_MNT_TYPE* dfs)
 {
     int result;
     int index;
     dfs_lfs_t* dfs_lfs;
 
     RT_ASSERT(dfs != RT_NULL);
-    RT_ASSERT(dfs->data != RT_NULL);
+    RT_ASSERT(DFS_LFS_MNT_DATA(dfs) != RT_NULL);
 
     /* find the device index and then umount it */
-    index = _get_disk(dfs->dev_id);
+    index = _get_disk(DFS_LFS_MNT_DEV(dfs));
     if (index == -1)
     {
         return -ENOENT;
     }
     _lfs_mount_tbl[index] = RT_NULL;
 
-    dfs_lfs = (dfs_lfs_t*)dfs->data;
-    dfs->data = RT_NULL;
+    dfs_lfs = (dfs_lfs_t*)DFS_LFS_MNT_DATA(dfs);
+    DFS_LFS_SET_MNT_DATA(dfs, RT_NULL);
 
     result = lfs_unmount(&dfs_lfs->lfs);
     rt_mutex_detach(&dfs_lfs->lock);
@@ -372,11 +574,15 @@ static int _dfs_lfs_unmount(struct dfs_filesystem* dfs)
 }
 
 #ifndef LFS_READONLY
-static int DFS_LFS_MKFS(rt_device_t dev_id, const char *fs_name)
+static int _dfs_lfs_mkfs(DFS_LFS_MKFS_PARAMS)
 {
     int result;
     int index;
     dfs_lfs_t* dfs_lfs;
+
+#if DFS_LFS_MKFS_HAS_FS_NAME
+    (void)fs_name;
+#endif /* DFS_LFS_MKFS_HAS_FS_NAME */
 
     if (dev_id == RT_NULL)
     {
@@ -448,7 +654,7 @@ static int _dfs_lfs_statfs_count(void* p, lfs_block_t b)
     return 0;
 }
 
-static int _dfs_lfs_statfs(struct dfs_filesystem* dfs, struct statfs* buf)
+static int _dfs_lfs_statfs(DFS_LFS_MNT_TYPE* dfs, struct statfs* buf)
 {
     dfs_lfs_t* dfs_lfs;
     int result;
@@ -456,9 +662,9 @@ static int _dfs_lfs_statfs(struct dfs_filesystem* dfs, struct statfs* buf)
 
     RT_ASSERT(buf != RT_NULL);
     RT_ASSERT(dfs != RT_NULL);
-    RT_ASSERT(dfs->data != RT_NULL);
+    RT_ASSERT(DFS_LFS_MNT_DATA(dfs) != RT_NULL);
 
-    dfs_lfs = (dfs_lfs_t*)dfs->data;
+    dfs_lfs = (dfs_lfs_t*)DFS_LFS_MNT_DATA(dfs);
 
     /* Get total sectors and free sectors */
     result = lfs_fs_traverse(&dfs_lfs->lfs, _dfs_lfs_statfs_count, &in_use);
@@ -475,15 +681,15 @@ static int _dfs_lfs_statfs(struct dfs_filesystem* dfs, struct statfs* buf)
 }
 
 #ifndef LFS_READONLY
-static int _dfs_lfs_unlink(struct dfs_filesystem* dfs, const char* path)
+static int _dfs_lfs_unlink(DFS_LFS_MNT_TYPE* dfs, const char* path)
 {
     dfs_lfs_t* dfs_lfs;
     int result;
 
     RT_ASSERT(dfs != RT_NULL);
-    RT_ASSERT(dfs->data != RT_NULL);
+    RT_ASSERT(DFS_LFS_MNT_DATA(dfs) != RT_NULL);
 
-    dfs_lfs = (dfs_lfs_t*)dfs->data;
+    dfs_lfs = (dfs_lfs_t*)DFS_LFS_MNT_DATA(dfs);
     result = lfs_remove(&dfs_lfs->lfs, path);
 
     return _lfs_result_to_dfs(result);
@@ -513,16 +719,16 @@ static void _dfs_lfs_tostat(struct stat* st, struct lfs_info* info, time_t mtime
     st->st_mtime = mtime;
 }
 
-static int _dfs_lfs_stat(struct dfs_filesystem* dfs, const char* path, struct stat* st)
+static int _dfs_lfs_stat(DFS_LFS_MNT_TYPE* dfs, const char* path, struct stat* st)
 {
     dfs_lfs_t* dfs_lfs;
     int result;
     struct lfs_info info;
 
     RT_ASSERT(dfs != RT_NULL);
-    RT_ASSERT(dfs->data != RT_NULL);
+    RT_ASSERT(DFS_LFS_MNT_DATA(dfs) != RT_NULL);
 
-    dfs_lfs = (dfs_lfs_t*)dfs->data;
+    dfs_lfs = (dfs_lfs_t*)DFS_LFS_MNT_DATA(dfs);
     result = lfs_stat(&dfs_lfs->lfs, path, &info);
 
     if (result != LFS_ERR_OK)
@@ -538,15 +744,15 @@ static int _dfs_lfs_stat(struct dfs_filesystem* dfs, const char* path, struct st
 }
 
 #ifndef LFS_READONLY
-static int _dfs_lfs_rename(struct dfs_filesystem* dfs, const char* from, const char* to)
+static int _dfs_lfs_rename(DFS_LFS_MNT_TYPE* dfs, const char* from, const char* to)
 {
     dfs_lfs_t* dfs_lfs;
     int result;
 
     RT_ASSERT(dfs != RT_NULL);
-    RT_ASSERT(dfs->data != RT_NULL);
+    RT_ASSERT(DFS_LFS_MNT_DATA(dfs) != RT_NULL);
 
-    dfs_lfs = (dfs_lfs_t*)dfs->data;
+    dfs_lfs = (dfs_lfs_t*)DFS_LFS_MNT_DATA(dfs);
     result = lfs_rename(&dfs_lfs->lfs, from, to);
 
     return _lfs_result_to_dfs(result);
@@ -556,29 +762,37 @@ static int _dfs_lfs_rename(struct dfs_filesystem* dfs, const char* from, const c
 /******************************************************************************
  * file operations
  ******************************************************************************/
-static int _dfs_lfs_open(struct dfs_file* file)
+static int _dfs_lfs_open(DFS_LFS_FILE_STRUCT* file)
 {
-    struct dfs_filesystem* dfs;
     dfs_lfs_t* dfs_lfs;
+    const char* path;
     int result;
     int flags = 0;
 
     RT_ASSERT(file != RT_NULL);
-
-    dfs = (struct dfs_filesystem*)file->vnode->fs;
-
-    RT_ASSERT(file->vnode->ref_count > 0);
-    if (file->vnode->ref_count > 1)
+    RT_ASSERT(DFS_LFS_FILE_IS_VALID(file));
+    RT_ASSERT(DFS_LFS_FILE_REF_COUNT(file) > 0);
+    if (DFS_LFS_FILE_REF_COUNT(file) > 1)
     {
-        if (file->vnode->type == FT_DIRECTORY
+        if (DFS_LFS_FILE_TYPE(file) == FT_DIRECTORY
                 && !(file->flags & O_DIRECTORY))
         {
             return -ENOENT;
         }
-        file->pos = 0;
+        DFS_LFS_FILE_POS(file) = 0;
     }
 
-    dfs_lfs = (dfs_lfs_t*)dfs->data;
+#if defined(RT_USING_DFS_V2)
+    RT_ASSERT(file->dentry != RT_NULL);
+    RT_ASSERT(file->dentry->mnt != RT_NULL);
+    RT_ASSERT(DFS_LFS_MNT_DATA(file->dentry->mnt) != RT_NULL);
+    dfs_lfs = (dfs_lfs_t*)DFS_LFS_MNT_DATA(file->dentry->mnt);
+#else
+    RT_ASSERT(DFS_LFS_FILE_FS(file) != RT_NULL);
+    RT_ASSERT(DFS_LFS_MNT_DATA(DFS_LFS_FILE_FS(file)) != RT_NULL);
+    dfs_lfs = (dfs_lfs_t*)DFS_LFS_MNT_DATA(DFS_LFS_FILE_FS(file));
+#endif /* defined(RT_USING_DFS_V2) */
+    path = DFS_LFS_FILE_PATH(file);
 
     if (file->flags & O_DIRECTORY)
     {
@@ -596,7 +810,7 @@ static int _dfs_lfs_open(struct dfs_file* file)
         if (file->flags & O_CREAT)
         {
 #ifndef LFS_READONLY
-            result = lfs_mkdir(dfs_lfs_fd->lfs, file->vnode->path);
+            result = lfs_mkdir(dfs_lfs_fd->lfs, path);
 #else
             result = -EINVAL;
 #endif
@@ -607,11 +821,11 @@ static int _dfs_lfs_open(struct dfs_file* file)
             else
             {
                 time_t now = time(RT_NULL);
-                lfs_setattr(dfs_lfs_fd->lfs, file->vnode->path, ATTR_TIMESTAMP, &now, sizeof(time_t));
+                lfs_setattr(dfs_lfs_fd->lfs, DFS_LFS_FILE_PATH(file), ATTR_TIMESTAMP, &now, sizeof(time_t));
             }
         }
 
-        result = lfs_dir_open(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.dir, file->vnode->path);
+        result = lfs_dir_open(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.dir, path);
         if (result != LFS_ERR_OK)
         {
             goto _error_dir;
@@ -658,7 +872,7 @@ static int _dfs_lfs_open(struct dfs_file* file)
         if (file->flags & O_APPEND)
             flags |= LFS_O_APPEND;
 
-        result = lfs_file_open(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file, file->vnode->path, flags);
+        result = lfs_file_open(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file, path, flags);
         if (result != LFS_ERR_OK)
         {
             goto _error_file;
@@ -666,8 +880,8 @@ static int _dfs_lfs_open(struct dfs_file* file)
         else
         {
             file->data = (void*)dfs_lfs_fd;
-            file->pos = dfs_lfs_fd->u.file.pos;
-            file->vnode->size = dfs_lfs_fd->u.file.ctz.size;
+            DFS_LFS_FILE_POS(file) = dfs_lfs_fd->u.file.pos;
+            DFS_LFS_FILE_SIZE(file) = dfs_lfs_fd->u.file.ctz.size;
             return RT_EOK;
         }
 
@@ -681,7 +895,7 @@ static int _dfs_lfs_open(struct dfs_file* file)
     }
 }
 
-static int _dfs_lfs_close(struct dfs_file* file)
+static int _dfs_lfs_close(DFS_LFS_FILE_STRUCT* file)
 {
     int result;
     dfs_lfs_fd_t* dfs_lfs_fd;
@@ -689,11 +903,11 @@ static int _dfs_lfs_close(struct dfs_file* file)
     RT_ASSERT(file != RT_NULL);
     RT_ASSERT(file->data != RT_NULL);
 
-    RT_ASSERT(file->vnode->ref_count > 0);
+    RT_ASSERT(DFS_LFS_FILE_REF_COUNT(file) > 0);
 
     dfs_lfs_fd = (dfs_lfs_fd_t*)file->data;
 
-    if (file->vnode->type == FT_DIRECTORY)
+    if (DFS_LFS_FILE_TYPE(file) == FT_DIRECTORY)
     {
         result = lfs_dir_close(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.dir);
     }
@@ -704,7 +918,7 @@ static int _dfs_lfs_close(struct dfs_file* file)
         if (result == LFS_ERR_OK && need_time_update)
         {
             time_t now = time(RT_NULL);
-            lfs_setattr(dfs_lfs_fd->lfs, file->vnode->path, ATTR_TIMESTAMP, &now, sizeof(time_t));
+            lfs_setattr(dfs_lfs_fd->lfs, DFS_LFS_FILE_PATH(file), ATTR_TIMESTAMP, &now, sizeof(time_t));
         }
     }
 
@@ -714,7 +928,7 @@ static int _dfs_lfs_close(struct dfs_file* file)
     return _lfs_result_to_dfs(result);
 }
 
-static int _dfs_lfs_ioctl(struct dfs_file* file, int cmd, void* args)
+static int _dfs_lfs_ioctl(DFS_LFS_FILE_STRUCT* file, int cmd, void* args)
 {
     switch (cmd)
     {
@@ -731,7 +945,7 @@ static int _dfs_lfs_ioctl(struct dfs_file* file, int cmd, void* args)
         RT_ASSERT(file != RT_NULL);
         RT_ASSERT(file->data != RT_NULL);
 
-        if (file->vnode->type == FT_DIRECTORY)
+        if (DFS_LFS_FILE_TYPE(file) == FT_DIRECTORY)
         {
             return -EISDIR;
         }
@@ -765,14 +979,15 @@ static int _dfs_lfs_ioctl(struct dfs_file* file, int cmd, void* args)
         {
             return _lfs_result_to_dfs((int)pos);
         }
-        file->pos = (rt_off_t)pos;
+        DFS_LFS_FILE_POS(file) = (rt_off_t)pos;
 
         pos = lfs_file_size(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file);
         if (pos < 0)
         {
             return _lfs_result_to_dfs((int)pos);
         }
-        file->vnode->size = (rt_off_t)pos;
+        DFS_LFS_FILE_SIZE(file) = (rt_off_t)pos;
+
         return RT_EOK;
 #endif
     }
@@ -784,85 +999,84 @@ static int _dfs_lfs_ioctl(struct dfs_file* file, int cmd, void* args)
     return -ENOSYS;
 }
 
-static DFS_LFS_RW_RETURN_TYPE _dfs_lfs_read(struct dfs_file* file, void* buf, size_t len)
+#if defined(RT_USING_DFS_V2) && !defined(LFS_READONLY)
+static int _dfs_lfs_truncate(DFS_LFS_FILE_STRUCT* file, off_t length)
 {
+    return _dfs_lfs_ioctl(file, RT_FIOFTRUNCATE, &length);
+}
+#endif /* defined(RT_USING_DFS_V2) && !defined(LFS_READONLY) */
+
+static DFS_LFS_RW_RETURN_TYPE _dfs_lfs_read(DFS_LFS_READ_PARAMS)
+{
+    int result;
     lfs_ssize_t ssize;
     dfs_lfs_fd_t* dfs_lfs_fd;
 
     RT_ASSERT(file != RT_NULL);
     RT_ASSERT(file->data != RT_NULL);
 
-    if (file->vnode->type == FT_DIRECTORY)
+    if (DFS_LFS_FILE_TYPE(file) == FT_DIRECTORY)
     {
         return -EISDIR;
     }
 
     dfs_lfs_fd = (dfs_lfs_fd_t*)file->data;
 
-#if 0
-    if (lfs_file_tell(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file) != file->pos)
+    result = _dfs_lfs_sync_file_pos(file, dfs_lfs_fd, DFS_LFS_IO_POS_PARAM);
+    if (result < 0)
     {
-        lfs_soff_t soff = lfs_file_seek(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file, file->pos, LFS_SEEK_SET);
-        if (soff < 0)
-        {
-            return _lfs_result_to_dfs(soff);
-        }
+        return result;
     }
-#endif
 
     ssize = lfs_file_read(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file, buf, len);
     if (ssize < 0)
     {
-        return _lfs_result_to_dfs(ssize);
+        return _lfs_result_to_dfs((int)ssize);
     }
 
     /* update position */
-    file->pos = dfs_lfs_fd->u.file.pos;
+    DFS_LFS_STORE_FILE_POS(file, DFS_LFS_IO_POS_PARAM, dfs_lfs_fd->u.file.pos);
 
     return ssize;
 }
 
 #ifndef LFS_READONLY
-static DFS_LFS_RW_RETURN_TYPE _dfs_lfs_write(struct dfs_file* file, const void* buf, size_t len)
+static DFS_LFS_RW_RETURN_TYPE _dfs_lfs_write(DFS_LFS_WRITE_PARAMS)
 {
+    int result;
     lfs_ssize_t ssize;
     dfs_lfs_fd_t* dfs_lfs_fd;
     RT_ASSERT(file != RT_NULL);
     RT_ASSERT(file->data != RT_NULL);
 
-    if (file->vnode->type == FT_DIRECTORY)
+    if (DFS_LFS_FILE_TYPE(file) == FT_DIRECTORY)
     {
         return -EISDIR;
     }
 
     dfs_lfs_fd = (dfs_lfs_fd_t*)file->data;
 
-#if 0
-    if (lfs_file_tell(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file) != file->pos)
+    result = _dfs_lfs_sync_file_pos(file, dfs_lfs_fd, DFS_LFS_IO_POS_PARAM);
+    if (result < 0)
     {
-        lfs_soff_t soff = lfs_file_seek(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file, file->pos, LFS_SEEK_SET);
-        if (soff < 0)
-        {
-            return _lfs_result_to_dfs(soff);
-        }
+        return result;
     }
-#endif
 
     ssize = lfs_file_write(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file, buf, len);
     if (ssize < 0)
     {
-        return _lfs_result_to_dfs(ssize);
+        return _lfs_result_to_dfs((int)ssize);
     }
 
     /* update position and file size */
-    file->pos = dfs_lfs_fd->u.file.pos;
-    file->vnode->size = dfs_lfs_fd->u.file.ctz.size;
+    DFS_LFS_STORE_FILE_POS(file, DFS_LFS_IO_POS_PARAM, dfs_lfs_fd->u.file.pos);
+    DFS_LFS_FILE_SIZE(file) = dfs_lfs_fd->u.file.ctz.size;
 
     return ssize;
 }
 #endif
 
-static int _dfs_lfs_flush(struct dfs_file* file)
+static int _dfs_lfs_flush(DFS_LFS_FILE_STRUCT* file)
 {
     int result;
     dfs_lfs_fd_t* dfs_lfs_fd;
@@ -877,13 +1091,13 @@ static int _dfs_lfs_flush(struct dfs_file* file)
     if (result == LFS_ERR_OK && need_time_update)
     {
         time_t now = time(RT_NULL);
-        lfs_setattr(dfs_lfs_fd->lfs, file->vnode->path, ATTR_TIMESTAMP, &now, sizeof(time_t));
+        lfs_setattr(dfs_lfs_fd->lfs, DFS_LFS_FILE_PATH(file), ATTR_TIMESTAMP, &now, sizeof(time_t));
     }
 
     return _lfs_result_to_dfs(result);
 }
 
-static DFS_LFS_LSK_RETURN_TYPE _dfs_lfs_lseek(struct dfs_file* file, rt_off_t offset)
+static DFS_LFS_LSK_RETURN_TYPE _dfs_lfs_lseek(DFS_LFS_LSEEK_PARAMS)
 {
     dfs_lfs_fd_t* dfs_lfs_fd;
 
@@ -892,34 +1106,50 @@ static DFS_LFS_LSK_RETURN_TYPE _dfs_lfs_lseek(struct dfs_file* file, rt_off_t of
 
     dfs_lfs_fd = (dfs_lfs_fd_t*)file->data;
 
-    if (file->vnode->type == FT_REGULAR)
+#if defined(RT_USING_DFS_V2)
+    switch (DFS_LFS_LSEEK_WHENCE)
+    {
+    case SEEK_SET:
+        break;
+    case SEEK_CUR:
+        offset += DFS_LFS_FILE_POS(file);
+        break;
+    case SEEK_END:
+        offset += DFS_LFS_FILE_SIZE(file);
+        break;
+    default:
+        return -EINVAL;
+    }
+#endif /* defined(RT_USING_DFS_V2) */
+
+    if (DFS_LFS_FILE_TYPE(file) == FT_REGULAR)
     {
         lfs_soff_t soff = lfs_file_seek(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file, offset, LFS_SEEK_SET);
         if (soff < 0)
         {
-            return _lfs_result_to_dfs(soff);
+            return _lfs_result_to_dfs((int)soff);
         }
 
-        file->pos = dfs_lfs_fd->u.file.pos;
+        DFS_LFS_FILE_POS(file) = dfs_lfs_fd->u.file.pos;
     }
-    else if (file->vnode->type == FT_DIRECTORY)
+    else if (DFS_LFS_FILE_TYPE(file) == FT_DIRECTORY)
     {
         /* skip . and .. */
         lfs_off_t off = offset / sizeof(struct dirent) + 2;
         lfs_soff_t soff = lfs_dir_seek(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.dir, off);
         if (soff < 0)
         {
-            return _lfs_result_to_dfs(soff);
+            return _lfs_result_to_dfs((int)soff);
         }
 
-        /* file->pos must stay in user-space: remove the two dot entries accounted for in dir.pos */
-        file->pos = (dfs_lfs_fd->u.dir.pos > 2 ? dfs_lfs_fd->u.dir.pos - 2 : 0) * sizeof(struct dirent);
+        /* DFS_LFS_FILE_POS(file) must stay in user-space: remove the two dot entries accounted for in dir.pos */
+        DFS_LFS_FILE_POS(file) = (dfs_lfs_fd->u.dir.pos > 2 ? dfs_lfs_fd->u.dir.pos - 2 : 0) * sizeof(struct dirent);
     }
 
-    return (file->pos);
+    return (DFS_LFS_FILE_POS(file));
 }
 
-static int _dfs_lfs_getdents(struct dfs_file* file, struct dirent* dirp, uint32_t count)
+static int _dfs_lfs_getdents(DFS_LFS_FILE_STRUCT* file, struct dirent* dirp, uint32_t count)
 {
     dfs_lfs_fd_t* dfs_lfs_fd;
     int result;
@@ -987,11 +1217,161 @@ static int _dfs_lfs_getdents(struct dfs_file* file, struct dirent* dirp, uint32_
         return _lfs_result_to_dfs(result);
     }
 
-    file->pos += index * sizeof(struct dirent);
+    DFS_LFS_FILE_POS(file) += index * sizeof(struct dirent);
 
     return index * sizeof(struct dirent);
 }
 
+static const struct dfs_file_ops _dfs_lfs_fops;
+
+#if defined(RT_USING_DFS_V2)
+#ifndef LFS_READONLY
+static int _dfs_lfs_dentry_unlink(struct dfs_dentry* dentry)
+{
+    RT_ASSERT(dentry != RT_NULL);
+    RT_ASSERT(dentry->mnt != RT_NULL);
+
+    return _dfs_lfs_unlink(dentry->mnt, dentry->pathname);
+}
+
+static int _dfs_lfs_dentry_rename(struct dfs_dentry* old_dentry, struct dfs_dentry* new_dentry)
+{
+    RT_ASSERT(old_dentry != RT_NULL);
+    RT_ASSERT(old_dentry->mnt != RT_NULL);
+    RT_ASSERT(new_dentry != RT_NULL);
+
+    return _dfs_lfs_rename(old_dentry->mnt, old_dentry->pathname, new_dentry->pathname);
+}
+#endif /* !defined(LFS_READONLY) */
+
+static int _dfs_lfs_dentry_stat(struct dfs_dentry* dentry, struct stat* st)
+{
+    RT_ASSERT(dentry != RT_NULL);
+    RT_ASSERT(dentry->mnt != RT_NULL);
+
+    return _dfs_lfs_stat(dentry->mnt, dentry->pathname, st);
+}
+
+static struct dfs_vnode* _dfs_lfs_lookup(struct dfs_dentry* dentry)
+{
+    struct dfs_vnode* vnode;
+    struct stat st;
+
+    if (dentry == RT_NULL || dentry->mnt == RT_NULL || dentry->mnt->data == RT_NULL)
+    {
+        return RT_NULL;
+    }
+
+    if (_dfs_lfs_stat(dentry->mnt, dentry->pathname, &st) != RT_EOK)
+    {
+        return RT_NULL;
+    }
+
+    vnode = dfs_vnode_create();
+    if (vnode == RT_NULL)
+    {
+        return RT_NULL;
+    }
+
+    vnode->mnt = dentry->mnt;
+    vnode->size = st.st_size;
+    vnode->nlink = 1;
+    vnode->mode = st.st_mode;
+    vnode->type = S_ISDIR(st.st_mode) ? FT_DIRECTORY : FT_REGULAR;
+    vnode->fops = &_dfs_lfs_fops;
+    vnode->data = RT_NULL;
+
+    return vnode;
+}
+
+static struct dfs_vnode* _dfs_lfs_create_vnode(struct dfs_dentry* dentry, int type, mode_t mode)
+{
+    struct dfs_vnode* vnode;
+
+    if (dentry == RT_NULL || dentry->mnt == RT_NULL || dentry->mnt->data == RT_NULL)
+    {
+        return RT_NULL;
+    }
+
+    vnode = dfs_vnode_create();
+    if (vnode == RT_NULL)
+    {
+        return RT_NULL;
+    }
+
+    vnode->mnt = dentry->mnt;
+    vnode->size = 0;
+    vnode->nlink = 1;
+    vnode->type = type;
+    vnode->mode = (type == FT_DIRECTORY) ? (S_IFDIR | mode) : (S_IFREG | mode);
+    vnode->fops = &_dfs_lfs_fops;
+    vnode->data = RT_NULL;
+
+    return vnode;
+}
+
+static int _dfs_lfs_free_vnode(struct dfs_vnode* vnode)
+{
+    if (vnode != RT_NULL)
+    {
+        vnode->data = RT_NULL;
+    }
+
+    return RT_EOK;
+}
+
+static const struct dfs_file_ops _dfs_lfs_fops = {
+    .open = _dfs_lfs_open,
+    .close = _dfs_lfs_close,
+    .ioctl = _dfs_lfs_ioctl,
+    .read = _dfs_lfs_read,
+#ifndef LFS_READONLY
+    .write = _dfs_lfs_write,
+#else
+    .write = RT_NULL,
+#endif
+    .flush = _dfs_lfs_flush,
+    .lseek = _dfs_lfs_lseek,
+#ifndef LFS_READONLY
+    .truncate = _dfs_lfs_truncate,
+#else
+    .truncate = RT_NULL,
+#endif
+    .getdents = _dfs_lfs_getdents,
+};
+
+static const struct dfs_filesystem_ops _dfs_lfs_ops = {
+    .name = "lfs",
+    .flags = DFS_LFS_FS_FLAGS,
+    .default_fops = &_dfs_lfs_fops,
+    .mount = _dfs_lfs_mount,
+    .umount = _dfs_lfs_unmount,
+#ifndef LFS_READONLY
+    .mkfs = _dfs_lfs_mkfs,
+#else
+    .mkfs = RT_NULL,
+#endif
+#ifndef LFS_READONLY
+    .unlink = _dfs_lfs_dentry_unlink,
+#else
+    .unlink = RT_NULL,
+#endif
+#ifndef LFS_READONLY
+    .rename = _dfs_lfs_dentry_rename,
+#else
+    .rename = RT_NULL,
+#endif
+    .stat = _dfs_lfs_dentry_stat,
+    .statfs = _dfs_lfs_statfs,
+    .lookup = _dfs_lfs_lookup,
+    .create_vnode = _dfs_lfs_create_vnode,
+    .free_vnode = _dfs_lfs_free_vnode,
+};
+
+static struct dfs_filesystem_type _dfs_lfs_type = {
+    .fs_ops = &_dfs_lfs_ops,
+};
+#else
 static const struct dfs_file_ops _dfs_lfs_fops = {
     _dfs_lfs_open,
     _dfs_lfs_close,
@@ -1000,42 +1380,43 @@ static const struct dfs_file_ops _dfs_lfs_fops = {
 #ifndef LFS_READONLY
     _dfs_lfs_write,
 #else
-    NULL,
+    RT_NULL,
 #endif
     _dfs_lfs_flush,
     _dfs_lfs_lseek,
     _dfs_lfs_getdents,
-    //    RT_NULL, /* poll interface */
+    /* RT_NULL, poll interface */
 };
 
 static const struct dfs_filesystem_ops _dfs_lfs_ops = {
     "lfs",
-    DFS_FS_FLAG_DEFAULT,
+    DFS_LFS_FS_FLAGS,
     &_dfs_lfs_fops,
     _dfs_lfs_mount,
     _dfs_lfs_unmount,
 #ifndef LFS_READONLY
     _dfs_lfs_mkfs,
 #else
-    NULL,
+    RT_NULL,
 #endif
     _dfs_lfs_statfs,
 #ifndef LFS_READONLY
     _dfs_lfs_unlink,
 #else
-    NULL,
+    RT_NULL,
 #endif
     _dfs_lfs_stat,
 #ifndef LFS_READONLY
     _dfs_lfs_rename,
 #else
-    NULL,
+    RT_NULL,
 #endif
 };
+#endif /* defined(RT_USING_DFS_V2) */
 
 int dfs_lfs_init(void)
 {
-    /* register ram file system */
-    return dfs_register(&_dfs_lfs_ops);
+    /* register littlefs file system */
+    return DFS_LFS_REGISTER();
 }
 INIT_COMPONENT_EXPORT(dfs_lfs_init);
