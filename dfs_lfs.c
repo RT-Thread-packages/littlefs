@@ -1201,9 +1201,21 @@ static int _dfs_lfs_getdents(DFS_LFS_FILE_STRUCT* file, struct dirent* dirp, uin
             break;
         }
 
-        d->d_namlen = (rt_uint8_t)rt_strlen(info.name);
+        rt_size_t name_len;
+        rt_size_t name_max;
+
+        name_max = sizeof(d->d_name);
+        name_len = rt_strlen(info.name);
+
+        if (name_len >= name_max)
+        {
+            name_len = name_max - 1;
+        }
+
+        d->d_namlen = (rt_uint8_t)name_len;
         d->d_reclen = (rt_uint16_t)sizeof(struct dirent);
-        rt_strncpy(d->d_name, info.name, DFS_PATH_MAX);
+        rt_memcpy(d->d_name, info.name, name_len);
+        d->d_name[name_len] = '\0';
 
         index++;
         if (index * sizeof(struct dirent) >= count)
