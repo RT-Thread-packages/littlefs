@@ -19,6 +19,9 @@ Environment variables:
                 gcc/nm/size commands.
   RTTHREAD_CLONE_ATTEMPTS
                 RT-Thread clone attempts before failing. Default: 3
+  RTTHREAD_CLONE_TIMEOUT
+                Seconds to allow a single RT-Thread clone attempt before
+                retrying. Default: 300
   RTTHREAD_CLONE_RETRY_DELAY
                 Seconds to wait between RT-Thread clone attempts. Default: 5
   RTTHREAD_WORKDIR
@@ -27,8 +30,25 @@ Environment variables:
   RTTHREAD_REUSE_WORKDIR
                 Reuse an existing matching RT-Thread checkout between repeated
                 invocations. Supported values: 0, 1. Default: 0
+  RTTHREAD_SOURCE_CACHE_DIR
+                Optional directory containing clean RT-Thread source tarballs.
+                When set, the script restores a clean cached checkout before
+                cloning and writes a fresh tarball after cloning.
+  RTTHREAD_SOURCE_CACHE_READ
+                Restore from RTTHREAD_SOURCE_CACHE_DIR when available. Use 0
+                for moving branches such as master to avoid stale source.
+                Supported values: 0, 1. Default: 1
+  RTTHREAD_SOURCE_ARCHIVE
+                Optional clean RT-Thread source tarball to extract before
+                restoring from cache or cloning. This is intended for moving
+                refs prepared as same-run workflow artifacts.
   RTTHREAD_ELF  ELF file name expected in the BSP directory. Default:
                 rtthread.elf
+  RTTHREAD_RUN_SMOKE
+                Run the QEMU littlefs smoke test after a successful build.
+                Supported values: 0, 1. Default: 0
+  RTTHREAD_QEMU_TIMEOUT
+                Seconds to wait for the QEMU smoke test result. Default: 120
 EOF_USAGE
 }
 
@@ -358,44 +378,152 @@ Return('objs')
 EOF_SCONS
 }
 
-write_compile_check_source() {
+require_ci_source() {
+    source_file=$1
+
+    [ -f "$source_file" ] || fail "CI source not found: $source_file"
+}
+
+copy_ci_application_source() {
+    source_dir=$1
+    app_dir=$2
+    source_name=$3
+    source_file="$source_dir/$source_name"
+
+    require_ci_source "$source_file"
+    cp "$source_file" "$app_dir/$source_name"
+}
+
+install_compile_check_source() {
     bsp_dir=$1
+    source_dir=$2
     app_dir="$bsp_dir/applications"
 
     [ -d "$app_dir" ] || fail "BSP applications directory not found: $app_dir"
 
-    cat > "$app_dir/littlefs_compile_check.c" <<'EOF_C'
-/* CI-only RT-Thread package integration check. */
-#include <rtthread.h>
-
-/* Match the package SConscript compile flag while including the real API. */
-/**
- * @brief Select the package-local RT-Thread littlefs configuration header.
- */
-#define LFS_CONFIG lfs_config.h
-#include "../packages/littlefs/lfs.h"
-
-/**
- * @brief Initialize the RT-Thread DFS littlefs package.
- *
- * @return 0 on success, otherwise a negative error code.
- */
-extern int dfs_lfs_init(void);
-
-/**
- * @brief Verify that package build graph linked littlefs symbols.
- *
- * @return 0 when required symbols are linked, otherwise -1.
- */
-static int littlefs_compile_check(void)
-{
-    int (* volatile dfs_init)(void) = dfs_lfs_init;
-    int (* volatile mount)(lfs_t *, const struct lfs_config *) = lfs_mount;
-
-    return (dfs_init != 0 && mount != 0) ? 0 : -1;
+    copy_ci_application_source "$source_dir" "$app_dir" \
+        littlefs_compile_check.c
 }
-INIT_APP_EXPORT(littlefs_compile_check);
-EOF_C
+
+install_smoke_sources() {
+    bsp_dir=$1
+    source_dir=$2
+    app_dir="$bsp_dir/applications"
+
+    [ -d "$app_dir" ] || fail "BSP applications directory not found: $app_dir"
+
+    copy_ci_application_source "$source_dir" "$app_dir" qemu_lfs_mtd.c
+    copy_ci_application_source "$source_dir" "$app_dir" littlefs_smoke.c
+}
+
+
+stop_qemu_smoke() {
+    stop_pid=$1
+    stop_wait_pid=${2:-}
+
+    if [ -n "$stop_pid" ]; then
+        kill -TERM "-$stop_pid" >/dev/null 2>&1 || \
+            kill "$stop_pid" >/dev/null 2>&1 || true
+    fi
+    if [ -n "$stop_wait_pid" ]; then
+        wait "$stop_wait_pid" >/dev/null 2>&1 || true
+    elif [ -n "$stop_pid" ]; then
+        wait "$stop_pid" >/dev/null 2>&1 || true
+    fi
+}
+
+run_qemu_smoke() {
+    bsp_dir=$1
+    log_file=$2
+    timeout_seconds=${RTTHREAD_QEMU_TIMEOUT:-120}
+    qemu_pid=
+    qemu_pid_file=
+    qemu_launcher_pid=
+    pid_wait=0
+    elapsed=0
+
+    case "$timeout_seconds" in
+        ''|*[!0-9]*)
+            fail "RTTHREAD_QEMU_TIMEOUT must be a non-negative integer"
+            ;;
+    esac
+    [ "$timeout_seconds" -gt 0 ] || \
+        fail "RTTHREAD_QEMU_TIMEOUT must be greater than 0"
+
+    need_cmd qemu-system-arm
+    need_cmd setsid
+    rm -f "$log_file"
+    qemu_pid_file="${log_file}.pid"
+    rm -f "$qemu_pid_file"
+
+    setsid -w sh -c '
+        printf "%s\n" "$$" > "$2"
+        cd "$1" || exit 1
+        if [ -f ./qemu.sh ]; then
+            QEMU_AUDIO_DRV=none exec sh ./qemu.sh
+        else
+            exec qemu-system-arm -M vexpress-a9 -smp 2 -kernel rtthread.elf \
+                -nographic -serial mon:stdio
+        fi
+    ' sh "$bsp_dir" "$qemu_pid_file" > "$log_file" 2>&1 &
+    qemu_launcher_pid=$!
+
+    while [ ! -s "$qemu_pid_file" ]; do
+        if ! kill -0 "$qemu_launcher_pid" >/dev/null 2>&1; then
+            wait "$qemu_launcher_pid" >/dev/null 2>&1 || true
+            cat "$log_file"
+            fail "QEMU launcher exited before writing its PID"
+        fi
+        if [ "$pid_wait" -ge 5 ]; then
+            stop_qemu_smoke "$qemu_launcher_pid" "$qemu_launcher_pid"
+            fail "timed out waiting for QEMU launcher PID"
+        fi
+        sleep 1
+        pid_wait=$((pid_wait + 1))
+    done
+    qemu_pid=$(cat "$qemu_pid_file")
+    rm -f "$qemu_pid_file"
+    case "$qemu_pid" in
+        ''|*[!0-9]*)
+            stop_qemu_smoke "$qemu_launcher_pid" "$qemu_launcher_pid"
+            fail "invalid QEMU launcher PID: $qemu_pid"
+            ;;
+    esac
+
+    while [ "$elapsed" -lt "$timeout_seconds" ]; do
+        if grep -q 'LITTLEFS_SMOKE_PASS' "$log_file" 2>/dev/null; then
+            stop_qemu_smoke "$qemu_pid" "$qemu_launcher_pid"
+            cat "$log_file"
+            printf 'verified littlefs QEMU smoke test in %s\n' "$log_file"
+            return 0
+        fi
+
+        if grep -q 'LITTLEFS_SMOKE_FAIL' "$log_file" 2>/dev/null; then
+            stop_qemu_smoke "$qemu_pid" "$qemu_launcher_pid"
+            cat "$log_file"
+            fail "littlefs QEMU smoke test failed"
+        fi
+
+        if grep -E -q 'prefetch abort|data abort|HardFault|assertion failed' \
+            "$log_file" 2>/dev/null; then
+            stop_qemu_smoke "$qemu_pid" "$qemu_launcher_pid"
+            cat "$log_file"
+            fail "QEMU faulted before littlefs smoke test completed"
+        fi
+
+        if ! kill -0 "$qemu_pid" >/dev/null 2>&1; then
+            stop_qemu_smoke "$qemu_pid" "$qemu_launcher_pid"
+            cat "$log_file"
+            fail "QEMU exited before littlefs smoke test completed"
+        fi
+
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    stop_qemu_smoke "$qemu_pid" "$qemu_launcher_pid"
+    cat "$log_file"
+    fail "timed out waiting for littlefs QEMU smoke test"
 }
 
 apply_littlefs_kconfig_profile() {
@@ -411,6 +539,8 @@ apply_littlefs_kconfig_profile() {
     set_kconfig_symbol "$config_file" DFS_USING_POSIX y
     set_kconfig_symbol "$config_file" DFS_USING_WORKDIR y
     set_kconfig_symbol "$config_file" DFS_FD_MAX 16
+    # Keep QEMU smoke tests independent from BSP SD-card FAT auto-mount.
+    unset_kconfig_symbol "$config_file" RT_USING_DFS_ELMFAT
     case "$dfs_version" in
         v1)
             if kconfig_tree_has_symbol "$kconfig_root" RT_USING_DFS_V1; then
@@ -427,15 +557,14 @@ apply_littlefs_kconfig_profile() {
                 unset_kconfig_symbol "$config_file" RT_USING_DFS_V1
             fi
             set_kconfig_symbol "$config_file" RT_USING_DFS_V2 y
-            unset_kconfig_symbol "$config_file" RT_USING_DFS_ELMFAT
-            unset_kconfig_symbol "$config_file" RT_USING_DFS_TMPFS
             unset_kconfig_symbol "$config_file" RT_USING_DFS_MQUEUE
             ;;
     esac
-    set_kconfig_symbol "$config_file" DFS_FILESYSTEMS_MAX 4
-    set_kconfig_symbol "$config_file" DFS_FILESYSTEM_TYPES_MAX 4
+    set_kconfig_symbol "$config_file" DFS_FILESYSTEMS_MAX 8
+    set_kconfig_symbol "$config_file" DFS_FILESYSTEM_TYPES_MAX 8
     set_kconfig_symbol "$config_file" RT_USING_DFS_DEVFS y
     set_kconfig_symbol "$config_file" RT_USING_DFS_ROMFS y
+    set_kconfig_symbol "$config_file" RT_USING_DFS_TMPFS y
     set_kconfig_symbol "$config_file" RT_USING_DEVICE_IPC y
     set_kconfig_symbol "$config_file" RT_USING_MUTEX y
     set_kconfig_symbol "$config_file" RT_USING_MTD_NOR y
@@ -469,12 +598,6 @@ verify_rtconfig_symbols() {
             if grep -q '^#define[[:space:]][[:space:]]*RT_USING_DFS_V1$' "$rtconfig_file"; then
                 fail "RT_USING_DFS_V1 is enabled in $rtconfig_file"
             fi
-            if grep -q '^#define[[:space:]][[:space:]]*RT_USING_DFS_ELMFAT$' "$rtconfig_file"; then
-                fail "RT_USING_DFS_ELMFAT is enabled in $rtconfig_file"
-            fi
-            if grep -q '^#define[[:space:]][[:space:]]*RT_USING_DFS_TMPFS$' "$rtconfig_file"; then
-                fail "RT_USING_DFS_TMPFS is enabled in $rtconfig_file"
-            fi
             ;;
     esac
     grep -q '^#define[[:space:]][[:space:]]*RT_USING_MTD_NOR$' "$rtconfig_file" || \
@@ -502,6 +625,13 @@ check_nm_symbol() {
     '
 }
 
+safe_log_fragment() {
+    printf '%s\n' "$1" | awk '{
+        gsub(/[^A-Za-z0-9_.-]/, "-")
+        print
+    }'
+}
+
 gnu_toolchain_prefix() {
     case "$1" in
         gcc)
@@ -521,12 +651,18 @@ clone_rtthread() {
     rtthread_ref=$1
     rtthread_dir=$2
     attempts=${RTTHREAD_CLONE_ATTEMPTS:-3}
+    clone_timeout=${RTTHREAD_CLONE_TIMEOUT:-300}
     retry_delay=${RTTHREAD_CLONE_RETRY_DELAY:-5}
     attempt=1
 
     case "$attempts" in
         ''|*[!0-9]*)
             fail "RTTHREAD_CLONE_ATTEMPTS must be a positive integer"
+            ;;
+    esac
+    case "$clone_timeout" in
+        ''|*[!0-9]*)
+            fail "RTTHREAD_CLONE_TIMEOUT must be a positive integer"
             ;;
     esac
     case "$retry_delay" in
@@ -536,11 +672,14 @@ clone_rtthread() {
     esac
     [ "$attempts" -gt 0 ] || \
         fail "RTTHREAD_CLONE_ATTEMPTS must be a positive integer"
+    [ "$clone_timeout" -gt 0 ] || \
+        fail "RTTHREAD_CLONE_TIMEOUT must be a positive integer"
 
     while [ "$attempt" -le "$attempts" ]; do
         printf 'cloning RT-Thread branch/tag %s (attempt %s/%s)\n' \
             "$rtthread_ref" "$attempt" "$attempts"
-        if git clone --depth 1 --branch "$rtthread_ref" \
+        if timeout --preserve-status "$clone_timeout" \
+            git clone --depth 1 --branch "$rtthread_ref" \
             https://github.com/RT-Thread/rt-thread.git "$rtthread_dir"; then
             return
         fi
@@ -583,6 +722,101 @@ reset_rtthread_checkout() {
     git -C "$rtthread_dir" clean -fdx
 }
 
+rtthread_source_cache_file() {
+    rtthread_ref=$1
+    cache_dir=${RTTHREAD_SOURCE_CACHE_DIR:-}
+
+    [ -n "$cache_dir" ] || return 1
+    cache_ref=$(safe_log_fragment "$rtthread_ref")
+    mkdir -p "$cache_dir"
+    printf '%s/rt-thread-%s.tar\n' "$cache_dir" "$cache_ref"
+}
+
+restore_rtthread_source_archive() {
+    rtthread_ref=$1
+    rtthread_work=$2
+    rtthread_dir=$3
+    source_archive=${RTTHREAD_SOURCE_ARCHIVE:-}
+
+    [ -n "$source_archive" ] || return 1
+    [ -f "$source_archive" ] || \
+        fail "RTTHREAD_SOURCE_ARCHIVE not found: $source_archive"
+
+    printf 'restoring clean RT-Thread source artifact: %s\n' \
+        "$source_archive"
+    rm -rf "$rtthread_dir"
+    if ! tar -xf "$source_archive" -C "$rtthread_work"; then
+        rm -rf "$rtthread_dir"
+        fail "failed to extract RTTHREAD_SOURCE_ARCHIVE: $source_archive"
+    fi
+
+    if ! rtthread_checkout_matches "$rtthread_ref" "$rtthread_dir"; then
+        rm -rf "$rtthread_dir"
+        fail "RTTHREAD_SOURCE_ARCHIVE did not match $rtthread_ref"
+    fi
+
+    reset_rtthread_checkout "$rtthread_dir"
+    return 0
+}
+
+restore_rtthread_source_cache() {
+    rtthread_ref=$1
+    rtthread_work=$2
+    rtthread_dir=$3
+
+    case "${RTTHREAD_SOURCE_CACHE_READ:-1}" in
+        1|yes|true|TRUE|on|ON) ;;
+        0|no|false|FALSE|off|OFF)
+            printf 'RT-Thread source cache restore disabled for %s\n' \
+                "$rtthread_ref"
+            return 1
+            ;;
+        *)
+            fail "RTTHREAD_SOURCE_CACHE_READ must be 0 or 1: ${RTTHREAD_SOURCE_CACHE_READ:-}"
+            ;;
+    esac
+
+    cache_file=$(rtthread_source_cache_file "$rtthread_ref") || return 1
+    [ -f "$cache_file" ] || return 1
+
+    printf 'restoring clean RT-Thread source cache: %s\n' "$cache_file"
+    rm -rf "$rtthread_dir"
+    if ! tar -xf "$cache_file" -C "$rtthread_work"; then
+        printf 'warning: failed to extract RT-Thread source cache\n' >&2
+        rm -rf "$rtthread_dir"
+        return 1
+    fi
+
+    if ! rtthread_checkout_matches "$rtthread_ref" "$rtthread_dir"; then
+        printf 'warning: RT-Thread source cache did not match %s\n' \
+            "$rtthread_ref" >&2
+        rm -rf "$rtthread_dir"
+        return 1
+    fi
+
+    reset_rtthread_checkout "$rtthread_dir"
+    return 0
+}
+
+save_rtthread_source_cache() {
+    rtthread_ref=$1
+    rtthread_work=$2
+    rtthread_dir=$3
+
+    cache_file=$(rtthread_source_cache_file "$rtthread_ref") || return 0
+    [ -d "$rtthread_dir/.git" ] || return 0
+
+    cache_tmp="${cache_file}.$$"
+    rm -f "$cache_tmp"
+    printf 'saving clean RT-Thread source cache: %s\n' "$cache_file"
+    if tar -cf "$cache_tmp" -C "$rtthread_work" rt-thread; then
+        mv "$cache_tmp" "$cache_file"
+    else
+        rm -f "$cache_tmp"
+        printf 'warning: failed to save RT-Thread source cache\n' >&2
+    fi
+}
+
 prepare_rtthread_checkout() {
     rtthread_ref=$1
     rtthread_work=$2
@@ -594,16 +828,37 @@ prepare_rtthread_checkout() {
             mkdir -p "$rtthread_work"
             : > "$rtthread_work/.rtthread-littlefs-ci-workdir"
             if rtthread_checkout_matches "$rtthread_ref" "$rtthread_dir"; then
-                printf 'reusing RT-Thread checkout for branch/tag %s\n' "$rtthread_ref"
+                printf 'reusing RT-Thread checkout for branch/tag %s\n' \
+                    "$rtthread_ref"
                 reset_rtthread_checkout "$rtthread_dir"
                 return
             fi
             reset_workdir "$rtthread_work"
+            if restore_rtthread_source_archive "$rtthread_ref" \
+                "$rtthread_work" "$rtthread_dir"; then
+                return
+            fi
+            if restore_rtthread_source_cache "$rtthread_ref" "$rtthread_work" \
+                "$rtthread_dir"; then
+                return
+            fi
             clone_rtthread "$rtthread_ref" "$rtthread_dir"
+            save_rtthread_source_cache "$rtthread_ref" "$rtthread_work" \
+                "$rtthread_dir"
             ;;
         0|no|false|FALSE|off|OFF)
             reset_workdir "$rtthread_work"
+            if restore_rtthread_source_archive "$rtthread_ref" \
+                "$rtthread_work" "$rtthread_dir"; then
+                return
+            fi
+            if restore_rtthread_source_cache "$rtthread_ref" "$rtthread_work" \
+                "$rtthread_dir"; then
+                return
+            fi
             clone_rtthread "$rtthread_ref" "$rtthread_dir"
+            save_rtthread_source_cache "$rtthread_ref" "$rtthread_work" \
+                "$rtthread_dir"
             ;;
         *)
             fail "RTTHREAD_REUSE_WORKDIR must be 0 or 1: ${RTTHREAD_REUSE_WORKDIR:-}"
@@ -638,13 +893,18 @@ fi
 need_cmd git
 need_cmd tar
 need_cmd awk
+need_cmd cp
 need_cmd dirname
 need_cmd find
 need_cmd getconf
 need_cmd grep
 need_cmd scons
 need_cmd sleep
+need_cmd timeout
 
+script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd -P) || \
+    fail "failed to resolve CI script directory"
+ci_source_dir="$script_dir/smoke"
 repo_root=$(pwd -P)
 rtthread_ref=${RTTHREAD_REF:-master}
 rtthread_bsp=${RTTHREAD_BSP:-bsp/qemu-vexpress-a9}
@@ -655,6 +915,7 @@ cc_cmd=${toolchain_prefix}gcc
 nm_cmd=${NM:-${toolchain_prefix}nm}
 size_cmd=${SIZE:-${toolchain_prefix}size}
 rtthread_elf=${RTTHREAD_ELF:-rtthread.elf}
+rtthread_run_smoke=${RTTHREAD_RUN_SMOKE:-0}
 need_cmd "$cc_cmd"
 need_cmd "$nm_cmd"
 need_cmd "$size_cmd"
@@ -674,7 +935,17 @@ prepare_rtthread_checkout "$rtthread_ref" "$rtthread_work" "$rtthread_dir"
 copy_package "$repo_root" "$package_dir" "$rtthread_work"
 write_packages_kconfig "$bsp_dir/packages"
 write_packages_sconscript "$bsp_dir/packages"
-write_compile_check_source "$bsp_dir"
+install_compile_check_source "$bsp_dir" "$ci_source_dir"
+case "$rtthread_run_smoke" in
+    1|yes|true|TRUE|on|ON)
+        install_smoke_sources "$bsp_dir" "$ci_source_dir"
+        ;;
+    0|no|false|FALSE|off|OFF)
+        ;;
+    *)
+        fail "RTTHREAD_RUN_SMOKE must be 0 or 1: $rtthread_run_smoke"
+        ;;
+esac
 
 export RTT_ROOT="$rtthread_dir"
 RTT_EXEC_PATH=${RTT_EXEC_PATH:-$(dirname "$(command -v "$cc_cmd")")}
@@ -693,3 +964,9 @@ verify_rtconfig_symbols rtconfig.h "$rtthread_dfs_version" "$rtthread_dir"
 
 scons -j"$(getconf _NPROCESSORS_ONLN)"
 verify_symbols "$bsp_dir" "$nm_cmd" "$size_cmd" "$rtthread_elf"
+case "$rtthread_run_smoke" in
+    1|yes|true|TRUE|on|ON)
+        smoke_log_ref=$(safe_log_fragment "$rtthread_ref")
+        run_qemu_smoke "$bsp_dir" "$repo_root/_ci/qemu-${smoke_log_ref}-${rtthread_dfs_version}.log"
+        ;;
+esac

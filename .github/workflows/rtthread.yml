@@ -17,93 +17,208 @@ defaults:
     shell: bash -euo pipefail {0}
 
 jobs:
-  compile-littlefs:
-    name: RT-Thread DFS compile
+  prepare-master-source:
+    name: Prepare RT-Thread master source
     runs-on: ubuntu-22.04
-    timeout-minutes: 180
+    timeout-minutes: 20
 
-    env:
-      RTTHREAD_ELF: rtthread.elf
-      RTT_CC: gcc
-      RTTHREAD_REUSE_WORKDIR: 1
-      RTTHREAD_BUILD_PROFILES: |
-        v4.1.1 v1 bsp/qemu-vexpress-a9
-        v5.0.0 v1 bsp/qemu-vexpress-a9
-        v5.0.1 v1 bsp/qemu-vexpress-a9
-        v5.0.1 v2 bsp/qemu-vexpress-a9
-        v5.0.2 v1 bsp/qemu-vexpress-a9
-        v5.0.2 v2 bsp/qemu-vexpress-a9
-        master v1 bsp/qemu-vexpress-a9
-        master v2 bsp/qemu-vexpress-a9
+    steps:
+      - name: Install source preparation dependencies
+        timeout-minutes: 10
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+
+          sudo apt-get update -qq \
+            -o Acquire::Retries=5 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30
+
+          timeout 8m sudo apt-get install -y --no-install-recommends \
+            -o Acquire::Retries=5 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            ca-certificates \
+            git
+
+      - name: Clone and pack RT-Thread master source
+        run: |
+          mkdir -p _ci/master-source-work _ci/artifacts
+
+          for attempt in 1 2 3; do
+            printf 'cloning RT-Thread master source attempt %s/3\n' "$attempt"
+            if timeout 12m git clone --depth 1 --branch master \
+              https://github.com/RT-Thread/rt-thread.git \
+              _ci/master-source-work/rt-thread; then
+              break
+            fi
+
+            rm -rf _ci/master-source-work/rt-thread
+            if [ "$attempt" = 3 ]; then
+              printf 'failed to clone RT-Thread master source\n' >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+          git -C _ci/master-source-work/rt-thread rev-parse HEAD \
+            | tee _ci/artifacts/rt-thread-master.sha
+          tar -cf _ci/artifacts/rt-thread-master.tar \
+            -C _ci/master-source-work rt-thread
+          test -s _ci/artifacts/rt-thread-master.tar
+          test -s _ci/artifacts/rt-thread-master.sha
+
+      - name: Upload RT-Thread master source
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtthread-master-source
+          path: |
+            _ci/artifacts/rt-thread-master.tar
+            _ci/artifacts/rt-thread-master.sha
+          if-no-files-found: error
+
+  test-littlefs-tag:
+    name: RT-Thread ${{ matrix.profile }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        include:
+          - profile: v4.1.1-v1
+            rtthread_ref: v4.1.1
+            dfs_version: v1
+            bsp: bsp/qemu-vexpress-a9
+          - profile: v5.0.0-v1
+            rtthread_ref: v5.0.0
+            dfs_version: v1
+            bsp: bsp/qemu-vexpress-a9
+          - profile: v5.0.1-v1
+            rtthread_ref: v5.0.1
+            dfs_version: v1
+            bsp: bsp/qemu-vexpress-a9
+          - profile: v5.0.1-v2
+            rtthread_ref: v5.0.1
+            dfs_version: v2
+            bsp: bsp/qemu-vexpress-a9
+          - profile: v5.0.2-v1
+            rtthread_ref: v5.0.2
+            dfs_version: v1
+            bsp: bsp/qemu-vexpress-a9
+          - profile: v5.0.2-v2
+            rtthread_ref: v5.0.2
+            dfs_version: v2
+            bsp: bsp/qemu-vexpress-a9
 
     steps:
       - name: Checkout littlefs package
         uses: actions/checkout@v4
 
-      - name: Install build dependencies
+      - name: Prepare RT-Thread source cache directory
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            ca-certificates \
-            git \
-            make \
-            gcc-arm-none-eabi \
-            libnewlib-arm-none-eabi \
-            libstdc++-arm-none-eabi-newlib \
-            scons \
-            python3 \
-            python3-pip
-          python3 -m pip install --user kconfiglib
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          arm-none-eabi-gcc --version
-          scons --version
-          python3 --version
+          mkdir -p "${{ runner.temp }}/rtthread-src-cache/${{ matrix.rtthread_ref }}"
 
-      - name: Compile littlefs against RT-Thread profiles
+      - name: Cache RT-Thread source archive
+        id: cache-rtthread-source
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/rtthread-src-cache/${{ matrix.rtthread_ref }}
+          key: ${{ runner.os }}-rtthread-src-${{ matrix.rtthread_ref }}-v1
+          restore-keys: |
+            ${{ runner.os }}-rtthread-src-${{ matrix.rtthread_ref }}-
+
+      - name: Set up RT-Thread littlefs build
+        uses: ./.github/actions/setup-rtthread-build
+        with:
+          rtthread-ref: ${{ matrix.rtthread_ref }}
+          rtthread-dfs-version: ${{ matrix.dfs_version }}
+          rtthread-bsp: ${{ matrix.bsp }}
+          rtthread-source-cache-dir: ${{ runner.temp }}/rtthread-src-cache/${{ matrix.rtthread_ref }}
+          rtthread-source-cache-read: '1'
+
+      - name: Compile and smoke-test littlefs profile
         run: |
           mkdir -p _ci/logs
-          printf '%s\n' "$RTTHREAD_BUILD_PROFILES" > _ci/rtthread-build-profiles.txt
+          log_file="_ci/logs/rtthread-${{ matrix.profile }}.log"
 
-          failed_profiles_file=_ci/failed-rtthread-profiles.txt
-          : > "$failed_profiles_file"
-          while read -r rtthread_ref dfs_version bsp; do
-            [ -n "${rtthread_ref:-}" ] || continue
-            case "$rtthread_ref" in
-              \#*) continue ;;
-            esac
+          printf 'building RT-Thread %s DFS %s with BSP %s\n' \
+            "$RTTHREAD_REF" "$RTTHREAD_DFS_VERSION" "$RTTHREAD_BSP"
 
-            log_ref=${rtthread_ref//\//-}
-            log_file="_ci/logs/rtthread-${log_ref}-${dfs_version}.log"
-            printf 'building RT-Thread %s DFS %s with BSP %s\n' \
-              "$rtthread_ref" "$dfs_version" "$bsp"
-
-            if RTTHREAD_REF="$rtthread_ref" \
-              RTTHREAD_DFS_VERSION="$dfs_version" \
-              RTTHREAD_BSP="$bsp" \
-              sh .github/ci/rtthread-littlefs/build.sh 2>&1 | tee "$log_file"; then
-              printf 'profile passed: %s %s %s\n' \
-                "$rtthread_ref" "$dfs_version" "$bsp"
-            else
-              printf 'profile failed: %s %s %s\n' \
-                "$rtthread_ref" "$dfs_version" "$bsp" >&2
-              printf '%s %s %s\n' \
-                "$rtthread_ref" "$dfs_version" "$bsp" >> "$failed_profiles_file"
-            fi
-          done < _ci/rtthread-build-profiles.txt
-
-          if [ -s "$failed_profiles_file" ]; then
-            printf 'failed RT-Thread profiles:\n' >&2
-            cat "$failed_profiles_file" >&2
-            exit 1
-          fi
+          sh .github/ci/rtthread-littlefs/build.sh 2>&1 | tee "$log_file"
 
       - name: Upload RT-Thread compile logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rtthread-compile-logs
+          name: rtthread-test-logs-${{ matrix.profile }}
           path: |
             _ci/logs/*.log
-            _ci/rtthread-build-profiles.txt
-            _ci/failed-rtthread-profiles.txt
+            _ci/qemu-*.log
+          if-no-files-found: warn
+
+  test-littlefs-master:
+    name: RT-Thread ${{ matrix.profile }}
+    needs: prepare-master-source
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - profile: master-v1
+            rtthread_ref: master
+            dfs_version: v1
+            bsp: bsp/qemu-vexpress-a9
+          - profile: master-v2
+            rtthread_ref: master
+            dfs_version: v2
+            bsp: bsp/qemu-vexpress-a9
+
+    steps:
+      - name: Checkout littlefs package
+        uses: actions/checkout@v4
+
+      - name: Download RT-Thread master source artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rtthread-master-source
+          path: ${{ runner.temp }}/rtthread-master-source
+
+      - name: Verify RT-Thread master source artifact
+        run: |
+          test -s "${{ runner.temp }}/rtthread-master-source/rt-thread-master.tar"
+          test -s "${{ runner.temp }}/rtthread-master-source/rt-thread-master.sha"
+          printf 'using RT-Thread master source artifact: '
+          cat "${{ runner.temp }}/rtthread-master-source/rt-thread-master.sha"
+
+      - name: Set up RT-Thread littlefs build
+        uses: ./.github/actions/setup-rtthread-build
+        with:
+          rtthread-ref: ${{ matrix.rtthread_ref }}
+          rtthread-dfs-version: ${{ matrix.dfs_version }}
+          rtthread-bsp: ${{ matrix.bsp }}
+          rtthread-source-archive: ${{ runner.temp }}/rtthread-master-source/rt-thread-master.tar
+          rtthread-source-cache-read: '0'
+
+      - name: Compile and smoke-test littlefs profile
+        run: |
+          mkdir -p _ci/logs
+          log_file="_ci/logs/rtthread-${{ matrix.profile }}.log"
+
+          printf 'building RT-Thread %s DFS %s with BSP %s\n' \
+            "$RTTHREAD_REF" "$RTTHREAD_DFS_VERSION" "$RTTHREAD_BSP"
+
+          sh .github/ci/rtthread-littlefs/build.sh 2>&1 | tee "$log_file"
+
+      - name: Upload RT-Thread compile logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtthread-test-logs-${{ matrix.profile }}
+          path: |
+            _ci/logs/*.log
+            _ci/qemu-*.log
           if-no-files-found: warn
