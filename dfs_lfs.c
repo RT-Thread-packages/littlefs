@@ -1134,9 +1134,19 @@ static DFS_LFS_LSK_RETURN_TYPE _dfs_lfs_lseek(DFS_LFS_LSEEK_PARAMS)
     }
     else if (DFS_LFS_FILE_TYPE(file) == FT_DIRECTORY)
     {
+        lfs_off_t off;
+        lfs_soff_t soff;
+        DFS_LFS_LSK_RETURN_TYPE dirent_size;
+
+        dirent_size = (DFS_LFS_LSK_RETURN_TYPE)sizeof(struct dirent);
+        if ((offset < 0) || ((offset % dirent_size) != 0))
+        {
+            return -EINVAL;
+        }
+
         /* skip . and .. */
-        lfs_off_t off = offset / sizeof(struct dirent) + 2;
-        lfs_soff_t soff = lfs_dir_seek(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.dir, off);
+        off = (lfs_off_t)(offset / dirent_size) + 2;
+        soff = lfs_dir_seek(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.dir, off);
         if (soff < 0)
         {
             return _lfs_result_to_dfs((int)soff);
@@ -1251,6 +1261,12 @@ static int _dfs_lfs_dentry_rename(struct dfs_dentry* old_dentry, struct dfs_dent
     RT_ASSERT(old_dentry != RT_NULL);
     RT_ASSERT(old_dentry->mnt != RT_NULL);
     RT_ASSERT(new_dentry != RT_NULL);
+    RT_ASSERT(new_dentry->mnt != RT_NULL);
+
+    if (old_dentry->mnt != new_dentry->mnt)
+    {
+        return -EXDEV;
+    }
 
     return _dfs_lfs_rename(old_dentry->mnt, old_dentry->pathname, new_dentry->pathname);
 }
