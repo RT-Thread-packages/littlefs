@@ -1,0 +1,218 @@
+name: Set up RT-Thread littlefs build
+description: Install shared RT-Thread littlefs CI build dependencies and export build environment.
+
+inputs:
+  python-version:
+    description: Python version used by RT-Thread SCons tooling.
+    required: false
+    default: '3.10'
+  requirements-path:
+    description: Path to the pip requirements file for RT-Thread littlefs CI.
+    required: false
+    default: .github/ci/rtthread-littlefs/requirements.txt
+  arm-gcc-version:
+    description: ARM GCC toolchain version.
+    required: false
+    default: 10.3-2021.10
+  arm-gcc-archive:
+    description: ARM GCC toolchain archive name.
+    required: false
+    default: gcc-arm-none-eabi-10.3-2021.10-x86_64-linux.tar.bz2
+  arm-gcc-md5:
+    description: Expected MD5 checksum for the ARM GCC toolchain archive.
+    required: false
+    default: 2383e4eb4ea23f248d33adc70dc3227e
+  arm-gcc-dir:
+    description: Installation directory for the cached ARM GCC toolchain.
+    required: false
+    default: /opt/gcc-arm-none-eabi
+  rtthread-ref:
+    description: RT-Thread git ref used by the littlefs build.
+    required: true
+  rtthread-dfs-version:
+    description: RT-Thread DFS profile version used by the littlefs build.
+    required: true
+  rtthread-bsp:
+    description: RT-Thread BSP path used by the littlefs build.
+    required: true
+  rtthread-elf:
+    description: Expected RT-Thread ELF output name.
+    required: false
+    default: rtthread.elf
+  rtthread-reuse-workdir:
+    description: Whether the build script may reuse an existing RT-Thread workdir.
+    required: false
+    default: '0'
+  rtthread-run-smoke:
+    description: Whether to run the littlefs QEMU smoke test.
+    required: false
+    default: '1'
+  rtthread-qemu-timeout:
+    description: QEMU smoke test timeout in seconds.
+    required: false
+    default: '120'
+  rtthread-source-cache-dir:
+    description: Optional RT-Thread source cache directory for immutable refs.
+    required: false
+    default: ''
+  rtthread-source-archive:
+    description: Optional RT-Thread source archive for prepacked refs such as master.
+    required: false
+    default: ''
+  rtthread-source-cache-read:
+    description: Whether the build script may restore RT-Thread source from cache.
+    required: false
+    default: '1'
+  rtt-cc:
+    description: RT-Thread compiler selector.
+    required: false
+    default: gcc
+
+runs:
+  using: composite
+  steps:
+    - name: Export RT-Thread littlefs build environment
+      shell: bash
+      env:
+        ARM_GCC_DIR: ${{ inputs.arm-gcc-dir }}
+        ARM_GCC_VERSION: ${{ inputs.arm-gcc-version }}
+        ARM_GCC_ARCHIVE: ${{ inputs.arm-gcc-archive }}
+        ARM_GCC_MD5: ${{ inputs.arm-gcc-md5 }}
+        RTT_CC: ${{ inputs.rtt-cc }}
+        RTTHREAD_REF: ${{ inputs.rtthread-ref }}
+        RTTHREAD_DFS_VERSION: ${{ inputs.rtthread-dfs-version }}
+        RTTHREAD_BSP: ${{ inputs.rtthread-bsp }}
+        RTTHREAD_ELF: ${{ inputs.rtthread-elf }}
+        RTTHREAD_REUSE_WORKDIR: ${{ inputs.rtthread-reuse-workdir }}
+        RTTHREAD_RUN_SMOKE: ${{ inputs.rtthread-run-smoke }}
+        RTTHREAD_QEMU_TIMEOUT: ${{ inputs.rtthread-qemu-timeout }}
+        RTTHREAD_SOURCE_CACHE_DIR: ${{ inputs.rtthread-source-cache-dir }}
+        RTTHREAD_SOURCE_ARCHIVE: ${{ inputs.rtthread-source-archive }}
+        RTTHREAD_SOURCE_CACHE_READ: ${{ inputs.rtthread-source-cache-read }}
+      run: |
+        set -euo pipefail
+        {
+          printf 'ARM_GCC_DIR=%s\n' "$ARM_GCC_DIR"
+          printf 'ARM_GCC_VERSION=%s\n' "$ARM_GCC_VERSION"
+          printf 'ARM_GCC_ARCHIVE=%s\n' "$ARM_GCC_ARCHIVE"
+          printf 'ARM_GCC_MD5=%s\n' "$ARM_GCC_MD5"
+          printf 'RTT_CC=%s\n' "$RTT_CC"
+          printf 'RTT_EXEC_PATH=%s/bin\n' "$ARM_GCC_DIR"
+          printf 'RTTHREAD_REF=%s\n' "$RTTHREAD_REF"
+          printf 'RTTHREAD_DFS_VERSION=%s\n' "$RTTHREAD_DFS_VERSION"
+          printf 'RTTHREAD_BSP=%s\n' "$RTTHREAD_BSP"
+          printf 'RTTHREAD_ELF=%s\n' "$RTTHREAD_ELF"
+          printf 'RTTHREAD_REUSE_WORKDIR=%s\n' "$RTTHREAD_REUSE_WORKDIR"
+          printf 'RTTHREAD_RUN_SMOKE=%s\n' "$RTTHREAD_RUN_SMOKE"
+          printf 'RTTHREAD_QEMU_TIMEOUT=%s\n' "$RTTHREAD_QEMU_TIMEOUT"
+          printf 'RTTHREAD_SOURCE_CACHE_READ=%s\n' "$RTTHREAD_SOURCE_CACHE_READ"
+          if [ -n "$RTTHREAD_SOURCE_CACHE_DIR" ]; then
+            printf 'RTTHREAD_SOURCE_CACHE_DIR=%s\n' "$RTTHREAD_SOURCE_CACHE_DIR"
+          fi
+          if [ -n "$RTTHREAD_SOURCE_ARCHIVE" ]; then
+            printf 'RTTHREAD_SOURCE_ARCHIVE=%s\n' "$RTTHREAD_SOURCE_ARCHIVE"
+          fi
+        } >> "$GITHUB_ENV"
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache: pip
+        cache-dependency-path: ${{ inputs.requirements-path }}
+
+    - name: Prepare ARM GCC cache directory
+      shell: bash
+      env:
+        ARM_GCC_DIR: ${{ inputs.arm-gcc-dir }}
+      run: |
+        set -euo pipefail
+        sudo mkdir -p "$ARM_GCC_DIR"
+        sudo chown -R "$USER:$(id -gn)" "$ARM_GCC_DIR"
+
+    - name: Cache ARM GCC toolchain
+      id: cache-arm-gcc
+      uses: actions/cache@v4
+      with:
+        path: ${{ inputs.arm-gcc-dir }}
+        key: ${{ runner.os }}-arm-gcc-${{ inputs.arm-gcc-version }}-v1
+
+    - name: Install build dependencies
+      shell: bash
+      env:
+        REQUIREMENTS_PATH: ${{ inputs.requirements-path }}
+      run: |
+        timeout 25m bash -euo pipefail <<'INSTALL_DEPS'
+        export DEBIAN_FRONTEND=noninteractive
+
+        sudo apt-get update -qq \
+          -o Acquire::Retries=5 \
+          -o Acquire::http::Timeout=30 \
+          -o Acquire::https::Timeout=30
+
+        timeout 20m sudo apt-get install -y --no-install-recommends \
+          -o Acquire::Retries=5 \
+          -o Acquire::http::Timeout=30 \
+          -o Acquire::https::Timeout=30 \
+          bzip2 \
+          ca-certificates \
+          git \
+          make \
+          qemu-system-arm \
+          wget
+
+        python -m pip install --user -r "$REQUIREMENTS_PATH"
+        export PATH="$HOME/.local/bin:$PATH"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        scons --version
+        python --version
+        INSTALL_DEPS
+
+    - name: Install cached ARM GCC toolchain
+      if: steps.cache-arm-gcc.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        ARM_GCC_ARCHIVE: ${{ inputs.arm-gcc-archive }}
+        ARM_GCC_DIR: ${{ inputs.arm-gcc-dir }}
+        ARM_GCC_MD5: ${{ inputs.arm-gcc-md5 }}
+        ARM_GCC_VERSION: ${{ inputs.arm-gcc-version }}
+      run: |
+        timeout 25m bash -euo pipefail <<'INSTALL_ARM_GCC'
+        toolchain_tmp=$(mktemp -d)
+        trap 'rm -rf "$toolchain_tmp"' EXIT
+
+        download_url="https://developer.arm.com/-/media/Files/downloads/gnu-rm/${ARM_GCC_VERSION}/${ARM_GCC_ARCHIVE}"
+        archive_path="$toolchain_tmp/$ARM_GCC_ARCHIVE"
+
+        for attempt in 1 2 3; do
+          printf 'downloading ARM GCC toolchain attempt %s/3\n' "$attempt"
+          if timeout 20m wget --progress=dot:giga --tries=3 --timeout=30 \
+            -O "$archive_path" "$download_url"; then
+            break
+          fi
+
+          if [ "$attempt" = 3 ]; then
+            printf 'failed to download ARM GCC toolchain\n' >&2
+            exit 1
+          fi
+          sleep 10
+        done
+
+        printf '%s  %s\n' "$ARM_GCC_MD5" "$archive_path" | md5sum -c -
+        tar -xjf "$archive_path" -C "$toolchain_tmp"
+
+        find "$ARM_GCC_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+        cp -a "$toolchain_tmp/gcc-arm-none-eabi-${ARM_GCC_VERSION}/." \
+          "$ARM_GCC_DIR/"
+        test -x "$ARM_GCC_DIR/bin/arm-none-eabi-gcc"
+        INSTALL_ARM_GCC
+
+    - name: Setup ARM GCC environment
+      shell: bash
+      env:
+        ARM_GCC_DIR: ${{ inputs.arm-gcc-dir }}
+      run: |
+        set -euo pipefail
+        echo "$ARM_GCC_DIR/bin" >> "$GITHUB_PATH"
+        echo "RTT_EXEC_PATH=$ARM_GCC_DIR/bin" >> "$GITHUB_ENV"
+        "$ARM_GCC_DIR/bin/arm-none-eabi-gcc" --version
