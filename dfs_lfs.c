@@ -15,13 +15,30 @@
 #include <stdio.h>
 #include <string.h>
 
-#if defined(RT_VERSION_CHECK) && (RTTHREAD_VERSION >= RT_VERSION_CHECK(5, 0, 2))
+#if defined(DFS_OFF_MAX)
+#define DFS_LFS_DFS_OFF_TYPE    dfs_off_t
+#define DFS_LFS_FILE_OFF_TYPE   dfs_off_t
+#define DFS_LFS_STAT_TYPE       struct dfs_stat
+#define DFS_LFS_STAT_MTIME(st)  ((st)->mtime)
+#elif defined(RT_USING_DFS_V2)
+#define DFS_LFS_DFS_OFF_TYPE    off_t
+#define DFS_LFS_FILE_OFF_TYPE   off_t
+#define DFS_LFS_STAT_TYPE       struct stat
+#define DFS_LFS_STAT_MTIME(st)  ((st)->st_mtime)
+#else
+#define DFS_LFS_DFS_OFF_TYPE    off_t
+#define DFS_LFS_FILE_OFF_TYPE   rt_off_t
+#define DFS_LFS_STAT_TYPE       struct stat
+#define DFS_LFS_STAT_MTIME(st)  ((st)->st_mtime)
+#endif
+
+#if defined(DFS_OFF_MAX) || (defined(RT_VERSION_CHECK) && (RTTHREAD_VERSION >= RT_VERSION_CHECK(5, 0, 2)))
 #define DFS_LFS_RW_RETURN_TYPE  ssize_t
-#define DFS_LFS_LSK_RETURN_TYPE off_t
+#define DFS_LFS_LSK_RETURN_TYPE DFS_LFS_DFS_OFF_TYPE
 #else
 #define DFS_LFS_RW_RETURN_TYPE  int
 #define DFS_LFS_LSK_RETURN_TYPE int
-#endif /* defined(RT_VERSION_CHECK) && (RTTHREAD_VERSION >= RT_VERSION_CHECK(5, 0, 2)) */
+#endif /* defined(DFS_OFF_MAX) || (defined(RT_VERSION_CHECK) && (RTTHREAD_VERSION >= RT_VERSION_CHECK(5, 0, 2))) */
 
 #if defined(RT_USING_DFS_V2) || (defined(RT_VERSION_CHECK) && (RTTHREAD_VERSION >= RT_VERSION_CHECK(5, 0, 0)))
 #define DFS_LFS_MKFS_PARAMS rt_device_t dev_id, const char *fs_name
@@ -59,12 +76,12 @@
 #define DFS_LFS_FILE_REF_COUNT(file)                ((file)->vnode->ref_count)
 #define DFS_LFS_FILE_IS_VALID(file)                 ((file)->vnode != RT_NULL)
 #define DFS_LFS_FILE_FS(file)                       ((file)->dentry->mnt)
-#define DFS_LFS_READ_PARAMS                         DFS_LFS_FILE_STRUCT* file, void* buf, size_t len, off_t* pos
-#define DFS_LFS_WRITE_PARAMS                        DFS_LFS_FILE_STRUCT* file, const void* buf, size_t len, off_t* pos
-#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, off_t offset, int whence
+#define DFS_LFS_READ_PARAMS                         DFS_LFS_FILE_STRUCT* file, void* buf, size_t len, DFS_LFS_DFS_OFF_TYPE* pos
+#define DFS_LFS_WRITE_PARAMS                        DFS_LFS_FILE_STRUCT* file, const void* buf, size_t len, DFS_LFS_DFS_OFF_TYPE* pos
+#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, DFS_LFS_DFS_OFF_TYPE offset, int whence
 #define DFS_LFS_IO_POS_PARAM                        pos
 #define DFS_LFS_LSEEK_WHENCE                        whence
-#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (*(pos) = (off_t)(lfs_pos))
+#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (*(pos) = (DFS_LFS_DFS_OFF_TYPE)(lfs_pos))
 #define DFS_LFS_REGISTER()                          dfs_register(&_dfs_lfs_type)
 #elif defined(RT_VERSION_CHECK) && (RTTHREAD_VERSION >= RT_VERSION_CHECK(5, 0, 2))
 /**
@@ -85,10 +102,10 @@
 #define DFS_LFS_FILE_FS(file)                       ((file)->vnode->fs)
 #define DFS_LFS_READ_PARAMS                         DFS_LFS_FILE_STRUCT* file, void* buf, size_t len
 #define DFS_LFS_WRITE_PARAMS                        DFS_LFS_FILE_STRUCT* file, const void* buf, size_t len
-#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, rt_off_t offset
+#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, DFS_LFS_FILE_OFF_TYPE offset
 #define DFS_LFS_IO_POS_PARAM                        RT_NULL
 #define DFS_LFS_LSEEK_WHENCE                        SEEK_SET
-#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (rt_off_t)(lfs_pos))
+#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (DFS_LFS_FILE_OFF_TYPE)(lfs_pos))
 #define DFS_LFS_FS_FLAGS                            DFS_FS_FLAG_DEFAULT
 #define DFS_LFS_REGISTER()                          dfs_register(&_dfs_lfs_ops)
 #elif defined(RT_USING_DFS_V1)
@@ -114,10 +131,10 @@
 #define DFS_LFS_FILE_FS(file)                       ((file)->vnode->fs)
 #define DFS_LFS_READ_PARAMS                         DFS_LFS_FILE_STRUCT* file, void* buf, size_t len
 #define DFS_LFS_WRITE_PARAMS                        DFS_LFS_FILE_STRUCT* file, const void* buf, size_t len
-#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, rt_off_t offset
+#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, DFS_LFS_FILE_OFF_TYPE offset
 #define DFS_LFS_IO_POS_PARAM                        RT_NULL
 #define DFS_LFS_LSEEK_WHENCE                        SEEK_SET
-#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (rt_off_t)(lfs_pos))
+#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (DFS_LFS_FILE_OFF_TYPE)(lfs_pos))
 #define DFS_LFS_FS_FLAGS                            DFS_FS_FLAG_DEFAULT
 #define DFS_LFS_REGISTER()                          dfs_register(&_dfs_lfs_ops)
 #elif defined(RT_VERSION_CHECK) && (RTTHREAD_VERSION >= RT_VERSION_CHECK(5, 0, 0))
@@ -142,10 +159,10 @@
 #define DFS_LFS_FILE_FS(file)                       ((file)->vnode->fs)
 #define DFS_LFS_READ_PARAMS                         DFS_LFS_FILE_STRUCT* file, void* buf, size_t len
 #define DFS_LFS_WRITE_PARAMS                        DFS_LFS_FILE_STRUCT* file, const void* buf, size_t len
-#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, rt_off_t offset
+#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, DFS_LFS_FILE_OFF_TYPE offset
 #define DFS_LFS_IO_POS_PARAM                        RT_NULL
 #define DFS_LFS_LSEEK_WHENCE                        SEEK_SET
-#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (rt_off_t)(lfs_pos))
+#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (DFS_LFS_FILE_OFF_TYPE)(lfs_pos))
 #define DFS_LFS_FS_FLAGS                            DFS_FS_FLAG_DEFAULT
 #define DFS_LFS_REGISTER()                          dfs_register(&_dfs_lfs_ops)
 #else
@@ -170,10 +187,10 @@
 #define DFS_LFS_FILE_FS(file)                       ((file)->fs)
 #define DFS_LFS_READ_PARAMS                         DFS_LFS_FILE_STRUCT* file, void* buf, size_t len
 #define DFS_LFS_WRITE_PARAMS                        DFS_LFS_FILE_STRUCT* file, const void* buf, size_t len
-#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, rt_off_t offset
+#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, DFS_LFS_FILE_OFF_TYPE offset
 #define DFS_LFS_IO_POS_PARAM                        RT_NULL
 #define DFS_LFS_LSEEK_WHENCE                        SEEK_SET
-#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (rt_off_t)(lfs_pos))
+#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (DFS_LFS_FILE_OFF_TYPE)(lfs_pos))
 #define DFS_LFS_FS_FLAGS                            DFS_FS_FLAG_DEFAULT
 #define DFS_LFS_REGISTER()                          dfs_register(&_dfs_lfs_ops)
 #endif /* defined(RT_USING_DFS_V2) */
@@ -406,6 +423,10 @@ static int _lfs_result_to_dfs(int result)
         status = -ENOMEM;
         break; // No more memory available
 
+    case LFS_ERR_FBIG:
+        status = -EFBIG;
+        break; // File too large
+
     case LFS_ERR_CORRUPT:
         status = -52;
         break; // Corrupted
@@ -418,10 +439,41 @@ static int _lfs_result_to_dfs(int result)
     return status;
 }
 
+static int _dfs_lfs_check_lfs_range(int64_t offset)
+{
+    if (offset < 0 || offset > (DFS_LFS_DFS_OFF_TYPE)LFS_FILE_MAX)
+    {
+        return -EINVAL;
+    }
+
+    return RT_EOK;
+}
+
+#if defined(RT_USING_DFS_V2)
+static int _dfs_lfs_add_file_off(DFS_LFS_FILE_OFF_TYPE base,
+                                 DFS_LFS_FILE_OFF_TYPE delta,
+                                 DFS_LFS_FILE_OFF_TYPE* result)
+{
+    if (base < 0)
+    {
+        return -EINVAL;
+    }
+
+    if ((delta > 0 && base > (DFS_LFS_FILE_OFF_TYPE)LFS_FILE_MAX - delta)
+            || (delta < 0 && delta < -base))
+    {
+        return -EINVAL;
+    }
+
+    *result = base + delta;
+    return RT_EOK;
+}
+#endif /* defined(RT_USING_DFS_V2) */
+
 /* DFS v2 passes read/write offsets explicitly. Keep DFS v1 behavior unchanged. */
 static int _dfs_lfs_sync_file_pos(DFS_LFS_FILE_STRUCT* file,
                                   dfs_lfs_fd_t* dfs_lfs_fd,
-                                  off_t* pos)
+                                  DFS_LFS_DFS_OFF_TYPE* pos)
 {
 #if defined(RT_USING_DFS_V2)
     lfs_soff_t current;
@@ -432,7 +484,13 @@ static int _dfs_lfs_sync_file_pos(DFS_LFS_FILE_STRUCT* file,
     RT_ASSERT(dfs_lfs_fd != RT_NULL);
     RT_ASSERT(pos != RT_NULL);
 
+    result = _dfs_lfs_check_lfs_range((int64_t)*pos);
+    if (result < 0)
+    {
+        return result;
+    }
     target = (lfs_soff_t)*pos;
+
     current = lfs_file_tell(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file);
     if (current < 0)
     {
@@ -696,9 +754,9 @@ static int _dfs_lfs_unlink(DFS_LFS_MNT_TYPE* dfs, const char* path)
 }
 #endif
 
-static void _dfs_lfs_tostat(struct stat* st, struct lfs_info* info, time_t mtime)
+static void _dfs_lfs_tostat(DFS_LFS_STAT_TYPE* st, struct lfs_info* info, time_t mtime)
 {
-    memset(st, 0, sizeof(struct stat));
+    memset(st, 0, sizeof(DFS_LFS_STAT_TYPE));
 
     /* convert to dfs stat structure */
     st->st_dev = 0;
@@ -716,10 +774,10 @@ static void _dfs_lfs_tostat(struct stat* st, struct lfs_info* info, time_t mtime
         break;
     }
 
-    st->st_mtime = mtime;
+    DFS_LFS_STAT_MTIME(st) = mtime;
 }
 
-static int _dfs_lfs_stat(DFS_LFS_MNT_TYPE* dfs, const char* path, struct stat* st)
+static int _dfs_lfs_stat(DFS_LFS_MNT_TYPE* dfs, const char* path, DFS_LFS_STAT_TYPE* st)
 {
     dfs_lfs_t* dfs_lfs;
     int result;
@@ -938,8 +996,9 @@ static int _dfs_lfs_ioctl(DFS_LFS_FILE_STRUCT* file, int cmd, void* args)
         return -EROFS;
 #else
         dfs_lfs_fd_t *dfs_lfs_fd;
-        off_t length;
+        DFS_LFS_DFS_OFF_TYPE length;
         int result;
+        lfs_off_t lfs_size;
         lfs_soff_t pos;
 
         RT_ASSERT(file != RT_NULL);
@@ -960,15 +1019,17 @@ static int _dfs_lfs_ioctl(DFS_LFS_FILE_STRUCT* file, int cmd, void* args)
             return -EBADF;
         }
 
-        length = *(off_t *)args;
-        if (length < 0)
+        length = *(DFS_LFS_DFS_OFF_TYPE *)args;
+        result = _dfs_lfs_check_lfs_range((int64_t)length);
+        if (result < 0)
         {
-            return -EINVAL;
+            return result;
         }
+        lfs_size = (lfs_off_t)length;
 
         dfs_lfs_fd = (dfs_lfs_fd_t *)file->data;
 
-        result = lfs_file_truncate(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file, (lfs_off_t)length);
+        result = lfs_file_truncate(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file, lfs_size);
         if (result < 0)
         {
             return _lfs_result_to_dfs(result);
@@ -979,14 +1040,14 @@ static int _dfs_lfs_ioctl(DFS_LFS_FILE_STRUCT* file, int cmd, void* args)
         {
             return _lfs_result_to_dfs((int)pos);
         }
-        DFS_LFS_FILE_POS(file) = (rt_off_t)pos;
+        DFS_LFS_FILE_POS(file) = (DFS_LFS_FILE_OFF_TYPE)pos;
 
         pos = lfs_file_size(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file);
         if (pos < 0)
         {
             return _lfs_result_to_dfs((int)pos);
         }
-        DFS_LFS_FILE_SIZE(file) = (rt_off_t)pos;
+        DFS_LFS_FILE_SIZE(file) = (DFS_LFS_FILE_OFF_TYPE)pos;
 
         return RT_EOK;
 #endif
@@ -1000,7 +1061,7 @@ static int _dfs_lfs_ioctl(DFS_LFS_FILE_STRUCT* file, int cmd, void* args)
 }
 
 #if defined(RT_USING_DFS_V2) && !defined(LFS_READONLY)
-static int _dfs_lfs_truncate(DFS_LFS_FILE_STRUCT* file, off_t length)
+static int _dfs_lfs_truncate(DFS_LFS_FILE_STRUCT* file, DFS_LFS_DFS_OFF_TYPE length)
 {
     return _dfs_lfs_ioctl(file, RT_FIOFTRUNCATE, &length);
 }
@@ -1100,6 +1161,8 @@ static int _dfs_lfs_flush(DFS_LFS_FILE_STRUCT* file)
 static DFS_LFS_LSK_RETURN_TYPE _dfs_lfs_lseek(DFS_LFS_LSEEK_PARAMS)
 {
     dfs_lfs_fd_t* dfs_lfs_fd;
+    lfs_soff_t lfs_offset;
+    int result;
 
     RT_ASSERT(file != RT_NULL);
     RT_ASSERT(file->data != RT_NULL);
@@ -1112,10 +1175,18 @@ static DFS_LFS_LSK_RETURN_TYPE _dfs_lfs_lseek(DFS_LFS_LSEEK_PARAMS)
     case SEEK_SET:
         break;
     case SEEK_CUR:
-        offset += DFS_LFS_FILE_POS(file);
+        result = _dfs_lfs_add_file_off(DFS_LFS_FILE_POS(file), offset, &offset);
+        if (result < 0)
+        {
+            return result;
+        }
         break;
     case SEEK_END:
-        offset += DFS_LFS_FILE_SIZE(file);
+        result = _dfs_lfs_add_file_off(DFS_LFS_FILE_SIZE(file), offset, &offset);
+        if (result < 0)
+        {
+            return result;
+        }
         break;
     default:
         return -EINVAL;
@@ -1124,7 +1195,16 @@ static DFS_LFS_LSK_RETURN_TYPE _dfs_lfs_lseek(DFS_LFS_LSEEK_PARAMS)
 
     if (DFS_LFS_FILE_TYPE(file) == FT_REGULAR)
     {
-        lfs_soff_t soff = lfs_file_seek(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file, offset, LFS_SEEK_SET);
+        lfs_soff_t soff;
+
+        result = _dfs_lfs_check_lfs_range((int64_t)offset);
+        if (result < 0)
+        {
+            return result;
+        }
+        lfs_offset = (lfs_soff_t)offset;
+
+        soff = lfs_file_seek(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file, lfs_offset, LFS_SEEK_SET);
         if (soff < 0)
         {
             return _lfs_result_to_dfs((int)soff);
@@ -1137,6 +1217,7 @@ static DFS_LFS_LSK_RETURN_TYPE _dfs_lfs_lseek(DFS_LFS_LSEEK_PARAMS)
         lfs_off_t off;
         lfs_soff_t soff;
         DFS_LFS_LSK_RETURN_TYPE dirent_size;
+        DFS_LFS_FILE_OFF_TYPE entry_index;
 
         dirent_size = (DFS_LFS_LSK_RETURN_TYPE)sizeof(struct dirent);
         if ((offset < 0) || ((offset % dirent_size) != 0))
@@ -1145,7 +1226,13 @@ static DFS_LFS_LSK_RETURN_TYPE _dfs_lfs_lseek(DFS_LFS_LSEEK_PARAMS)
         }
 
         /* skip . and .. */
-        off = (lfs_off_t)(offset / dirent_size) + 2;
+        entry_index = (DFS_LFS_FILE_OFF_TYPE)(offset / dirent_size);
+        if (entry_index > (DFS_LFS_FILE_OFF_TYPE)((lfs_off_t)-1 - 2))
+        {
+            return -EINVAL;
+        }
+
+        off = (lfs_off_t)entry_index + 2;
         soff = lfs_dir_seek(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.dir, off);
         if (soff < 0)
         {
@@ -1272,7 +1359,7 @@ static int _dfs_lfs_dentry_rename(struct dfs_dentry* old_dentry, struct dfs_dent
 }
 #endif /* !defined(LFS_READONLY) */
 
-static int _dfs_lfs_dentry_stat(struct dfs_dentry* dentry, struct stat* st)
+static int _dfs_lfs_dentry_stat(struct dfs_dentry* dentry, DFS_LFS_STAT_TYPE* st)
 {
     RT_ASSERT(dentry != RT_NULL);
     RT_ASSERT(dentry->mnt != RT_NULL);
@@ -1283,7 +1370,7 @@ static int _dfs_lfs_dentry_stat(struct dfs_dentry* dentry, struct stat* st)
 static struct dfs_vnode* _dfs_lfs_lookup(struct dfs_dentry* dentry)
 {
     struct dfs_vnode* vnode;
-    struct stat st;
+    DFS_LFS_STAT_TYPE st;
 
     if (dentry == RT_NULL || dentry->mnt == RT_NULL || dentry->mnt->data == RT_NULL)
     {
