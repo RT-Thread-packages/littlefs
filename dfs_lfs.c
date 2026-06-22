@@ -85,10 +85,10 @@
 #define DFS_LFS_FILE_FS(file)                       ((file)->vnode->fs)
 #define DFS_LFS_READ_PARAMS                         DFS_LFS_FILE_STRUCT* file, void* buf, size_t len
 #define DFS_LFS_WRITE_PARAMS                        DFS_LFS_FILE_STRUCT* file, const void* buf, size_t len
-#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, rt_off_t offset
+#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, off_t offset
 #define DFS_LFS_IO_POS_PARAM                        RT_NULL
 #define DFS_LFS_LSEEK_WHENCE                        SEEK_SET
-#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (rt_off_t)(lfs_pos))
+#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (off_t)(lfs_pos))
 #define DFS_LFS_FS_FLAGS                            DFS_FS_FLAG_DEFAULT
 #define DFS_LFS_REGISTER()                          dfs_register(&_dfs_lfs_ops)
 #elif defined(RT_USING_DFS_V1)
@@ -114,10 +114,10 @@
 #define DFS_LFS_FILE_FS(file)                       ((file)->vnode->fs)
 #define DFS_LFS_READ_PARAMS                         DFS_LFS_FILE_STRUCT* file, void* buf, size_t len
 #define DFS_LFS_WRITE_PARAMS                        DFS_LFS_FILE_STRUCT* file, const void* buf, size_t len
-#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, rt_off_t offset
+#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, off_t offset
 #define DFS_LFS_IO_POS_PARAM                        RT_NULL
 #define DFS_LFS_LSEEK_WHENCE                        SEEK_SET
-#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (rt_off_t)(lfs_pos))
+#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (off_t)(lfs_pos))
 #define DFS_LFS_FS_FLAGS                            DFS_FS_FLAG_DEFAULT
 #define DFS_LFS_REGISTER()                          dfs_register(&_dfs_lfs_ops)
 #elif defined(RT_VERSION_CHECK) && (RTTHREAD_VERSION >= RT_VERSION_CHECK(5, 0, 0))
@@ -142,10 +142,10 @@
 #define DFS_LFS_FILE_FS(file)                       ((file)->vnode->fs)
 #define DFS_LFS_READ_PARAMS                         DFS_LFS_FILE_STRUCT* file, void* buf, size_t len
 #define DFS_LFS_WRITE_PARAMS                        DFS_LFS_FILE_STRUCT* file, const void* buf, size_t len
-#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, rt_off_t offset
+#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, off_t offset
 #define DFS_LFS_IO_POS_PARAM                        RT_NULL
 #define DFS_LFS_LSEEK_WHENCE                        SEEK_SET
-#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (rt_off_t)(lfs_pos))
+#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (off_t)(lfs_pos))
 #define DFS_LFS_FS_FLAGS                            DFS_FS_FLAG_DEFAULT
 #define DFS_LFS_REGISTER()                          dfs_register(&_dfs_lfs_ops)
 #else
@@ -170,10 +170,10 @@
 #define DFS_LFS_FILE_FS(file)                       ((file)->fs)
 #define DFS_LFS_READ_PARAMS                         DFS_LFS_FILE_STRUCT* file, void* buf, size_t len
 #define DFS_LFS_WRITE_PARAMS                        DFS_LFS_FILE_STRUCT* file, const void* buf, size_t len
-#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, rt_off_t offset
+#define DFS_LFS_LSEEK_PARAMS                        DFS_LFS_FILE_STRUCT* file, off_t offset
 #define DFS_LFS_IO_POS_PARAM                        RT_NULL
 #define DFS_LFS_LSEEK_WHENCE                        SEEK_SET
-#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (rt_off_t)(lfs_pos))
+#define DFS_LFS_STORE_FILE_POS(file, pos, lfs_pos)  (DFS_LFS_FILE_POS(file) = (off_t)(lfs_pos))
 #define DFS_LFS_FS_FLAGS                            DFS_FS_FLAG_DEFAULT
 #define DFS_LFS_REGISTER()                          dfs_register(&_dfs_lfs_ops)
 #endif /* defined(RT_USING_DFS_V2) */
@@ -979,14 +979,14 @@ static int _dfs_lfs_ioctl(DFS_LFS_FILE_STRUCT* file, int cmd, void* args)
         {
             return _lfs_result_to_dfs((int)pos);
         }
-        DFS_LFS_FILE_POS(file) = (rt_off_t)pos;
+        DFS_LFS_FILE_POS(file) = (off_t)pos;
 
         pos = lfs_file_size(dfs_lfs_fd->lfs, &dfs_lfs_fd->u.file);
         if (pos < 0)
         {
             return _lfs_result_to_dfs((int)pos);
         }
-        DFS_LFS_FILE_SIZE(file) = (rt_off_t)pos;
+        DFS_LFS_FILE_SIZE(file) = (size_t)pos;
 
         return RT_EOK;
 #endif
